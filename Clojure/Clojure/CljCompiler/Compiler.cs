@@ -1395,10 +1395,22 @@ namespace clojure.lang
         }
 
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes")]
         internal static bool LoadAssembly(FileInfo assyInfo)
         {
             Assembly assy = Assembly.LoadFrom(assyInfo.FullName);
+            return InitAssembly(assy);
+        }
+
+        internal static bool LoadAssembly(byte[] assyData)
+        {
+            Assembly assy = Assembly.Load(assyData);
+            return InitAssembly(assy);
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes")]
+        private static bool InitAssembly(Assembly assy)
+        {
+
             Type initType = assy.GetType("__Init__");
             if (initType == null)
             {
@@ -1412,11 +1424,10 @@ namespace clojure.lang
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error initializing {0}: {1}", assyInfo.FullName, e.Message);
+                Console.WriteLine("Error initializing {0}: {1}", assy.FullName, e.Message);
                 return false;
             }
         }
-
         #endregion
 
         #region Loading
@@ -1718,5 +1729,6 @@ namespace clojure.lang
         }
 
         #endregion
+
     }
 }

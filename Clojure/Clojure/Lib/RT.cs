@@ -513,9 +513,40 @@ namespace clojure.lang
 
         #region Initialization
 
+        static Assembly ResolveAssembly(object sender, ResolveEventArgs args)
+        {
+            Assembly containingAsm;
+            var asmName = new AssemblyName(args.Name);
+            var name = asmName.Name;
+            var stream = GetEmbeddedResourceStream(name, out containingAsm);
+            if(stream == null)
+            {
+                name = name + ".dll";
+                stream = GetEmbeddedResourceStream(name, out containingAsm);
+                if (stream == null)
+                    return null;
+            }
+            return Assembly.Load(ReadStreamBytes(stream));
+        }
+
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1810:InitializeReferenceTypeStaticFieldsInline")]
         static RT()
         {
+            AppDomain.CurrentDomain.AssemblyResolve += ResolveAssembly;
+
+            // Eagerly load all referenced assemblies so that they can be used for
+            // resolving clojure namespaces
+            foreach(var asmName in Assembly.GetEntryAssembly().GetReferencedAssemblies())
+            {
+                try
+                {
+                    Assembly.Load(asmName);
+                }
+                catch (Exception)
+                {
+                }
+            }
+
             // TODO: Check for existence of ClojureContext.Default before doing this?
 
             ScriptRuntimeSetup setup = new ScriptRuntimeSetup();
@@ -3033,7 +3064,7 @@ namespace clojure.lang
 
         #endregion
 
-        #region Loading/compiling
+        # region Loading/compiling
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly")]
         public static void load(String relativePath)
@@ -3044,16 +3075,10 @@ namespace clojure.lang
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly")]
         public static void load(String relativePath, Boolean failIfNotFound)
         {
-            //string assemblyname = relativePath + ".clj.dll";
-            //string cljname = relativePath + ".clj";
-
-            //FileInfo assyInfo = FindFile(assemblyname);
-            //FileInfo cljInfo = FindFile(cljname);
-
-            string cljname = relativePath + ".clj";
-            FileInfo cljInfo = FindFile(cljname);
-
             string assemblyname = relativePath.Replace('/', '.') + ".clj.dll";
+            string cljname = relativePath + ".clj";
+
+            FileInfo cljInfo = FindFile(cljname);
             FileInfo assyInfo = FindFile(AppDomain.CurrentDomain.BaseDirectory, assemblyname);
 
             bool loaded = false;
@@ -3074,17 +3099,59 @@ namespace clojure.lang
                 }
             }
 
-            if (!loaded && cljInfo != null)
+            if (!loaded)
             {
-                if (booleanCast(Compiler.CompileFilesVar.deref()))
-                    Compile(cljInfo,cljname);
+                if (cljInfo != null)
+                {
+                    if (booleanCast(Compiler.CompileFilesVar.deref()))
+                        Compile(cljInfo, cljname);
+                    else
+                        LoadScript(cljInfo, cljname);
+                    loaded = true;
+                }
                 else
-                    LoadScript(cljInfo, cljname); ;
+                {
+                    loaded = TryLoadFromEmbeddedResource(relativePath, assemblyname);
+                }
             }
-            else if (!loaded && failIfNotFound)
+            if (!loaded && failIfNotFound)
                 throw new FileNotFoundException(String.Format("Could not locate {0} or {1} on load path.", assemblyname, cljname));
 
+        }
 
+        private static bool TryLoadFromEmbeddedResource(string relativePath, string assemblyname)
+        {
+            Assembly containingAssembly;
+            var asmStream = GetEmbeddedResourceStream(assemblyname, out containingAssembly);
+            if (asmStream != null)
+            {
+                try
+                {
+                    Var.pushThreadBindings(RT.map(CurrentNSVar, CurrentNSVar.deref(),
+                                                  WarnOnReflectionVar, WarnOnReflectionVar.deref(),
+                                                  RT.UncheckedMathVar, RT.UncheckedMathVar.deref()));
+                    if (Compiler.LoadAssembly(ReadStreamBytes(asmStream)))
+                        return true;
+                }
+                finally
+                {
+                    Var.popThreadBindings();
+                }
+            }
+            var embeddedCljName = relativePath.Replace("/", ".") + ".clj";
+            var stream = GetEmbeddedResourceStream(embeddedCljName, out containingAssembly);
+            if (stream != null)
+            {
+                using (var rdr = new StreamReader(stream))
+                {
+                    if (booleanCast(Compiler.CompileFilesVar.deref()))
+                        Compile(containingAssembly.FullName, embeddedCljName, rdr, relativePath);
+                    else
+                        LoadScript(containingAssembly.FullName, embeddedCljName, rdr, relativePath);
+                }
+                return true;
+            }
+            return false;
         }
 
         private static void MaybeLoadCljScript(string cljname)
@@ -3106,18 +3173,26 @@ namespace clojure.lang
                 throw new FileNotFoundException(String.Format("Could not locate Clojure resource on {0}", ClojureLoadPathString));
         }
 
-
         public  static void LoadScript(FileInfo cljInfo, string relativePath)
         {
             using (TextReader rdr = cljInfo.OpenText())
-                Compiler.load(rdr, cljInfo.FullName, cljInfo.Name, relativePath);
+                LoadScript(cljInfo.FullName, cljInfo.Name, rdr, relativePath);
         }
 
+        private static void LoadScript(string fullName, string name, TextReader rdr, string relativePath)
+        {
+            Compiler.load(rdr, fullName, name, relativePath);
+        }
 
         private static void Compile(FileInfo cljInfo, string relativePath)
         {
             using ( TextReader rdr = cljInfo.OpenText() )
-                Compiler.Compile(rdr, cljInfo.Directory.FullName, cljInfo.Name, relativePath);
+                Compile(cljInfo.Directory.FullName, cljInfo.Name, rdr, relativePath);
+        }
+
+        private static void Compile(string dirName, string name, TextReader rdr, string relativePath)
+        {
+            Compiler.Compile(rdr, dirName, name, relativePath);
         }
 
 
@@ -3173,6 +3248,41 @@ namespace clojure.lang
             return path.Replace('/', Path.DirectorySeparatorChar);
         }
 
+        static Stream GetEmbeddedResourceStream(string resourceName, out Assembly containingAssembly)
+        {
+            containingAssembly = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    var stream = asm.GetManifestResourceStream(resourceName);
+                    if (stream != null)
+                    {
+                        containingAssembly = asm;
+                        return stream;
+                    }
+                }
+                catch (Exception)
+                {
+                }
+            }
+            return null;
+        }
+
+        static byte[] ReadStreamBytes(Stream stream)
+        {
+            try
+            {
+                var len = stream.Length;
+                var data = new byte[len];
+                stream.Read(data, 0, (int)len);
+                return data;
+            }
+            finally
+            {
+                stream.Dispose();
+            }
+        }
 
         // duck typing stderr plays nice with e.g. swank 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly")]
