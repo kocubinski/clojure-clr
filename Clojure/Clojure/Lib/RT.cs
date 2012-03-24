@@ -517,7 +517,6 @@ namespace clojure.lang
         {
             Assembly containingAsm;
             var asmName = new AssemblyName(args.Name);
-            Console.WriteLine("Resolving {0}", args.Name);
             var name = asmName.Name;
             var stream = GetEmbeddedResourceStream(name, out containingAsm);
             if(stream == null)
