@@ -517,6 +517,7 @@ namespace clojure.lang
         {
             Assembly containingAsm;
             var asmName = new AssemblyName(args.Name);
+            Console.WriteLine("Resolving {0}", args.Name);
             var name = asmName.Name;
             var stream = GetEmbeddedResourceStream(name, out containingAsm);
             if(stream == null)
@@ -3091,7 +3092,7 @@ namespace clojure.lang
                     Var.pushThreadBindings(RT.map(CurrentNSVar, CurrentNSVar.deref(),
                         WarnOnReflectionVar, WarnOnReflectionVar.deref(),
                         RT.UncheckedMathVar, RT.UncheckedMathVar.deref()));
-                    loaded = Compiler.LoadAssembly(assyInfo);
+                    loaded = Compiler.LoadAssembly(assyInfo, relativePath);
                 }
                 finally
                 {
@@ -3111,7 +3112,11 @@ namespace clojure.lang
                 }
                 else
                 {
-                    loaded = TryLoadFromEmbeddedResource(relativePath, assemblyname);
+                    loaded = Compiler.TryLoadInitType(relativePath);
+                    if (!loaded)
+                    {
+                        loaded = TryLoadFromEmbeddedResource(relativePath, assemblyname);
+                    }
                 }
             }
             if (!loaded && failIfNotFound)
@@ -3130,7 +3135,7 @@ namespace clojure.lang
                     Var.pushThreadBindings(RT.map(CurrentNSVar, CurrentNSVar.deref(),
                                                   WarnOnReflectionVar, WarnOnReflectionVar.deref(),
                                                   RT.UncheckedMathVar, RT.UncheckedMathVar.deref()));
-                    if (Compiler.LoadAssembly(ReadStreamBytes(asmStream)))
+                    if (Compiler.LoadAssembly(ReadStreamBytes(asmStream), relativePath))
                         return true;
                 }
                 finally
@@ -3194,7 +3199,6 @@ namespace clojure.lang
         {
             Compiler.Compile(rdr, dirName, name, relativePath);
         }
-
 
         static FileInfo FindFile(string path, string filename)
         {

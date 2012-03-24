@@ -1235,6 +1235,16 @@ namespace clojure.lang
             return context == null ? "_INTERP" : "_COMP_" + (new AssemblyName(context.AssemblyBuilder.FullName)).Name;
         }
 
+        internal static string InitClassName(string sourcePath)
+        {
+            return "__Init__$" + sourcePath.Replace(".", "/");
+        }
+
+        internal static string REPLClassName(string sourcePath)
+        {
+            return "__REPL__$" + sourcePath.Replace(".", "/");
+        }
+
         internal static object Compile(TextReader rdr, string sourceDirectory, string sourceName, string relativePath)
         {
             if (CompilePathVar.deref() == null)
@@ -1279,9 +1289,10 @@ namespace clojure.lang
             try
             {
                 FnExpr objx = new FnExpr(null);
-                objx.InternalName = sourcePath.Replace(Path.PathSeparator, '/').Substring(0, sourcePath.LastIndexOf('.')) + "__init";
+                var internalName = sourcePath.Replace(Path.PathSeparator, '/').Substring(0, sourcePath.LastIndexOf('.'));
+                objx.InternalName =  internalName + "__init";
 
-                TypeBuilder exprTB = context.AssemblyGen.DefinePublicType("__REPL__", typeof(object), true);
+                TypeBuilder exprTB = context.AssemblyGen.DefinePublicType(REPLClassName(internalName), typeof(object), true);
 
                 //List<string> names = new List<string>();
                 List<Expr> exprs = new List<Expr>();
@@ -1302,7 +1313,7 @@ namespace clojure.lang
                 // Need to put the loader init in its own type because we can't generate calls on the MethodBuilders
                 //  until after their types have been closed.
 
-                TypeBuilder initTB = context.AssemblyGen.DefinePublicType("__Init__", typeof(object), true);
+                TypeBuilder initTB = context.AssemblyGen.DefinePublicType(InitClassName(internalName), typeof(object), true);
 
                 Expression pushNSExpr = Expression.Call(null, Method_Compiler_PushNS);
                 Expression popExpr = Expression.Call(null, Method_Var_popThreadBindings);
@@ -1395,28 +1406,36 @@ namespace clojure.lang
         }
 
 
-        internal static bool LoadAssembly(FileInfo assyInfo)
+        internal static bool LoadAssembly(FileInfo assyInfo, string relativePath)
         {
-            Assembly assy = Assembly.LoadFrom(assyInfo.FullName);
-            return InitAssembly(assy);
+            Assembly assy = Assembly.LoadFrom(assyInfo.FullName) ;
+            return InitAssembly(assy, relativePath);
         }
 
-        internal static bool LoadAssembly(byte[] assyData)
+        internal static bool LoadAssembly(byte[] assyData, string relativePath)
         {
             Assembly assy = Assembly.Load(assyData);
-            return InitAssembly(assy);
+            return InitAssembly(assy, relativePath);
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes")]
-        private static bool InitAssembly(Assembly assy)
+        private static bool InitAssembly(Assembly assy, string relativePath)
         {
-
-            Type initType = assy.GetType("__Init__");
+            Type initType = assy.GetType(InitClassName(relativePath));
             if (initType == null)
             {
-                Console.WriteLine("Bad assembly");
-                return false;
+                initType = assy.GetType("__Init__"); // old init class name
+                if (initType == null)
+                {
+                    Console.WriteLine("Bad assembly");
+                    return false;
+                }
             }
+            return InvokeInitType(assy, initType);
+        }
+
+        private static bool InvokeInitType(Assembly assy, Type initType)
+        {
             try
             {
                 initType.InvokeMember("Initialize", BindingFlags.InvokeMethod | BindingFlags.Static | BindingFlags.Public, Type.DefaultBinder, null, new object[0]);
@@ -1428,6 +1447,14 @@ namespace clojure.lang
                 return false;
             }
         }
+
+        internal static bool TryLoadInitType(string relativePath)
+        {
+            Type initType = Type.GetType(InitClassName(relativePath));
+            if (initType == null) return false;
+            return InvokeInitType(initType.Assembly, initType);
+        }
+
         #endregion
 
         #region Loading
@@ -1729,6 +1756,5 @@ namespace clojure.lang
         }
 
         #endregion
-
     }
 }
