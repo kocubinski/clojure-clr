@@ -3234,6 +3234,31 @@ namespace clojure.lang
                 if ((fi = FindFile(path, fileName)) != null)
                     return fi;
 
+            return FindRemappedFile(fileName);
+        }
+
+        public static readonly Var NsLoadMappings = Var.intern(Namespace.findOrCreate(Symbol.intern("clojure.core")),
+                                                 Symbol.intern("*ns-load-mappings*"), null).setDynamic();
+
+        public static FileInfo FindRemappedFile(string filename)
+        {
+            var nsLoadMappings = NsLoadMappings.deref() as Atom;
+            if (nsLoadMappings == null) return null;
+            var nsLoadMappingsVal = nsLoadMappings.deref() as PersistentVector;
+            foreach (var x in nsLoadMappingsVal)
+            {
+                var mapping = x as PersistentVector;
+                if (mapping == null || mapping.length() < 2) continue;
+                var nsRoot = mapping[0] as string;
+                if (nsRoot == null) continue;
+                if(filename.StartsWith(nsRoot))
+                {
+                    var fsRoot = mapping[1] as string;
+                    var probePath = ConvertPath(fsRoot) + ConvertPath(filename.Substring(nsRoot.Length));
+                    if(File.Exists(probePath))
+                        return new FileInfo(probePath);
+                }
+            }
             return null;
         }
 
