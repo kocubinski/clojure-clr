@@ -1,9 +1,8 @@
 using System.Dynamic;
-using clojure.lang;
 
-namespace clojure.lang.Interop
+namespace clojure.lang.Hosting
 {
-    public class Clj
+    public class Clojure
     {
         private static readonly Var REQUIRE = RT.var("clojure.core", "require");
 
@@ -34,9 +33,16 @@ namespace clojure.lang.Interop
 
         public static dynamic Require(string nsname)
         {
+            if(nsname.Equals("clojure.core"))
+                return new Namespace(nsname);
             var symbol = Symbol.intern(nsname);
             REQUIRE.invoke(symbol);
             return new Namespace(nsname);
+        }
+
+        public static void AddNamespaceDirectoryMapping(string baseNamespace, string directory)
+        {
+            RT.var("clojure.core", "add-ns-load-mapping").invoke(baseNamespace, directory);
         }
     }
 }
