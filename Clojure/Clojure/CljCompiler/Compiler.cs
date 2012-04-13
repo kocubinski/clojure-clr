@@ -1130,33 +1130,15 @@ namespace clojure.lang
             return context == null ? "_INTERP" : "_COMP_" + (new AssemblyName(context.AssemblyBuilder.FullName)).Name;
         }
 
+        internal static string InitClassName(string sourcePath)
+        {
+            return "__Init__$" + sourcePath.Replace(".", "/");
+        }
+        
         public static void PushNS()
         {
             Var.pushThreadBindings(PersistentHashMap.create(Var.intern(Symbol.intern("clojure.core"),
                                                                        Symbol.intern("*ns*")).setDynamic(), null));
-        }
-
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes")]
-        internal static bool LoadAssembly(FileInfo assyInfo)
-        {
-            Assembly assy = Assembly.LoadFrom(assyInfo.FullName);
-            Type initType = assy.GetType("__Init__");
-            if (initType == null)
-            {
-                Console.WriteLine("Bad assembly");
-                return false;
-            }
-            try
-            {
-                initType.InvokeMember("Initialize", BindingFlags.InvokeMethod | BindingFlags.Static | BindingFlags.Public, Type.DefaultBinder, null, new object[0]);
-                return true;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("Error initializing {0}: {1}", assyInfo.FullName, e.Message);
-                return false;
-            }
         }
 
         public static object Compile(TextReader rdr, string sourceDirectory, string sourceName, string relativePath)
@@ -1283,6 +1265,55 @@ namespace clojure.lang
             {
                 Var.popThreadBindings();
             }
+        }
+
+        internal static bool LoadAssembly(FileInfo assyInfo, string relativePath)
+        {
+            Assembly assy = Assembly.LoadFrom(assyInfo.FullName) ;
+            return InitAssembly(assy, relativePath);
+        }
+
+        internal static bool LoadAssembly(byte[] assyData, string relativePath)
+        {
+            Assembly assy = Assembly.Load(assyData);
+            return InitAssembly(assy, relativePath);
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1031:DoNotCatchGeneralExceptionTypes")]
+        private static bool InitAssembly(Assembly assy, string relativePath)
+        {
+            Type initType = assy.GetType(InitClassName(relativePath));
+            if (initType == null)
+            {
+                initType = assy.GetType("__Init__"); // old init class name
+                if (initType == null)
+                {
+                    Console.WriteLine("Bad assembly");
+                    return false;
+                }
+            }
+            return InvokeInitType(assy, initType);
+        }
+
+        private static bool InvokeInitType(Assembly assy, Type initType)
+        {
+            try
+            {
+                initType.InvokeMember("Initialize", BindingFlags.InvokeMethod | BindingFlags.Static | BindingFlags.Public, Type.DefaultBinder, null, new object[0]);
+                return true;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Error initializing {0}: {1}", assy.FullName, e.Message);
+                return false;
+            }
+        }
+
+        internal static bool TryLoadInitType(string relativePath)
+        {
+            Type initType = Type.GetType(InitClassName(relativePath));
+            if (initType == null) return false;
+            return InvokeInitType(initType.Assembly, initType);
         }
 
         #endregion
