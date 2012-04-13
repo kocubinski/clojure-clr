@@ -1154,9 +1154,10 @@ namespace clojure.lang
 
             // generate loader class
             ObjExpr objx = new ObjExpr(null);
-            objx.InternalName = sourcePath.Replace(Path.PathSeparator, '/').Substring(0, sourcePath.LastIndexOf('.')) + "__init";
+            var internalName = sourcePath.Replace(Path.PathSeparator, '/').Substring(0, sourcePath.LastIndexOf('.'));
+            objx.InternalName = internalName + "__init";
 
-            TypeBuilder initTB = context.AssemblyGen.DefinePublicType("__Init__", typeof(object), true);
+            TypeBuilder initTB = context.AssemblyGen.DefinePublicType(InitClassName(internalName), typeof(object), true);
             context = context.WithTypeBuilder(initTB);
 
             // static load method
@@ -1267,9 +1268,13 @@ namespace clojure.lang
             }
         }
 
+        #endregion
+        
+        #region Loading
+
         internal static bool LoadAssembly(FileInfo assyInfo, string relativePath)
         {
-            Assembly assy = Assembly.LoadFrom(assyInfo.FullName) ;
+            Assembly assy = Assembly.LoadFrom(assyInfo.FullName);
             return InitAssembly(assy, relativePath);
         }
 
@@ -1304,21 +1309,19 @@ namespace clojure.lang
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error initializing {0}: {1}", assy.FullName, e.Message);
+                Console.WriteLine("Error initializing {0}: {1}", assy.FullName, e);
                 return false;
             }
         }
 
         internal static bool TryLoadInitType(string relativePath)
         {
-            Type initType = Type.GetType(InitClassName(relativePath));
-            if (initType == null) return false;
+            var initClassName = InitClassName(relativePath);
+            Type initType = Type.GetType(initClassName);
+            if (initType == null)
+                return false;
             return InvokeInitType(initType.Assembly, initType);
         }
-
-        #endregion
-        
-        #region Loading
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly", MessageId = "load")]
         public static object loadFile(string fileName)

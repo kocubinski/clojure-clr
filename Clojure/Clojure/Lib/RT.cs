@@ -3126,7 +3126,17 @@ namespace clojure.lang
                 }
                 else
                 {
-                    loaded = Compiler.TryLoadInitType(relativePath);
+                    try
+                    {
+                        Var.pushThreadBindings(RT.map(CurrentNSVar, CurrentNSVar.deref(),
+                            WarnOnReflectionVar, WarnOnReflectionVar.deref(),
+                            RT.UncheckedMathVar, RT.UncheckedMathVar.deref()));
+                        loaded = Compiler.TryLoadInitType(relativePath);
+                    }
+                    finally
+                    {
+                        Var.popThreadBindings();
+                    }
                     if (!loaded)
                     {
                         loaded = TryLoadFromEmbeddedResource(relativePath, assemblyname);
