@@ -1146,11 +1146,22 @@ namespace clojure.lang
             if (CompilePathVar.deref() == null)
                 throw new InvalidOperationException("*compile-path* not set");
 
+            string sourcePath = relativePath;
+            GenContext context = GenContext.CreateWithExternalAssembly(sourceName, sourcePath, ".dll", true);
+
+            Compile(context, rdr, sourceDirectory, sourceName, relativePath);
+
+            context.SaveAssembly();
+
+            return null;
+        }
+
+        public static object Compile(GenContext context,TextReader rdr, string sourceDirectory, string sourceName, string relativePath)
+        {
             object eofVal = new object();
             object form;
 
             string sourcePath = relativePath;
-            GenContext context = GenContext.CreateWithExternalAssembly(sourceName, sourcePath, ".dll", true);
 
             // generate loader class
             ObjExpr objx = new ObjExpr(null);
@@ -1214,8 +1225,6 @@ namespace clojure.lang
                 cbGen.Emit(OpCodes.Ret);
 
                 initTB.CreateType();
-
-                context.SaveAssembly();
             }
             catch (LispReader.ReaderException e)
             {
