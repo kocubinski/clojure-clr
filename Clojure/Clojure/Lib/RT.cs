@@ -3101,57 +3101,62 @@ namespace clojure.lang
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly")]
         public static void load(String relativePath, Boolean failIfNotFound)
         {
-            string assemblyname = relativePath.Replace('/', '.') + ".clj.dll";
-            string cljname = relativePath + ".clj";
-
-            FileInfo cljInfo = FindFile(cljname);
-            FileInfo assyInfo = FindFile(AppDomain.CurrentDomain.BaseDirectory, assemblyname);
-
             bool loaded = false;
+            string cljname = relativePath + ".clj";
+            string assemblyname = relativePath.Replace('/', '.') + ".clj.dll";
 
-            if ((assyInfo != null &&
-                (cljInfo == null || assyInfo.LastWriteTime > cljInfo.LastWriteTime)))
+            if (!RuntimeBootstrapFlag.DisableFileLoad)
+            {
+                FileInfo cljInfo = FindFile(cljname);
+                FileInfo assyInfo = FindFile(AppDomain.CurrentDomain.BaseDirectory, assemblyname);
+
+
+                if ((assyInfo != null &&
+                     (cljInfo == null || assyInfo.LastWriteTime > cljInfo.LastWriteTime)))
+                {
+                    try
+                    {
+                        Var.pushThreadBindings(RT.map(CurrentNSVar, CurrentNSVar.deref(),
+                                                      WarnOnReflectionVar, WarnOnReflectionVar.deref(),
+                                                      RT.UncheckedMathVar, RT.UncheckedMathVar.deref()));
+                        loaded = Compiler.LoadAssembly(assyInfo, relativePath);
+                    }
+                    finally
+                    {
+                        Var.popThreadBindings();
+                    }
+                }
+
+                if(!loaded)
+                {
+                    if (cljInfo != null)
+                    {
+                        if (booleanCast(Compiler.CompileFilesVar.deref()))
+                            Compile(cljInfo, cljname);
+                        else
+                            LoadScript(cljInfo, cljname);
+                        loaded = true;
+                    }
+                }
+            }
+
+
+            if (!loaded)
             {
                 try
                 {
                     Var.pushThreadBindings(RT.map(CurrentNSVar, CurrentNSVar.deref(),
                         WarnOnReflectionVar, WarnOnReflectionVar.deref(),
                         RT.UncheckedMathVar, RT.UncheckedMathVar.deref()));
-                    loaded = Compiler.LoadAssembly(assyInfo, relativePath);
+                    loaded = Compiler.TryLoadInitType(relativePath);
                 }
                 finally
                 {
                     Var.popThreadBindings();
                 }
-            }
-
-            if (!loaded)
-            {
-                if (cljInfo != null)
+                if (!loaded)
                 {
-                    if (booleanCast(Compiler.CompileFilesVar.deref()))
-                        Compile(cljInfo, cljname);
-                    else
-                        LoadScript(cljInfo, cljname);
-                    loaded = true;
-                }
-                else
-                {
-                    try
-                    {
-                        Var.pushThreadBindings(RT.map(CurrentNSVar, CurrentNSVar.deref(),
-                            WarnOnReflectionVar, WarnOnReflectionVar.deref(),
-                            RT.UncheckedMathVar, RT.UncheckedMathVar.deref()));
-                        loaded = Compiler.TryLoadInitType(relativePath);
-                    }
-                    finally
-                    {
-                        Var.popThreadBindings();
-                    }
-                    if (!loaded)
-                    {
-                        loaded = TryLoadFromEmbeddedResource(relativePath, assemblyname);
-                    }
+                    loaded = TryLoadFromEmbeddedResource(relativePath, assemblyname);
                 }
             }
             if (!loaded && failIfNotFound)
@@ -3394,6 +3399,7 @@ namespace clojure.lang
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA2211:NonConstantFieldsShouldNotBeVisible")]
         public static bool _doRTBootstrap = true;
 
+        public static bool DisableFileLoad = false;
     }
 
 }
