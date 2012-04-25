@@ -263,6 +263,7 @@ namespace clojure.lang.CljCompiler.Ast
 
         internal static readonly MethodInfo Method_RT_booleanCast = typeof(RT).GetMethod("booleanCast", new Type[] { typeof(object) });
 
+        internal static readonly MethodInfo Method_RT_intPtrCast = typeof (RT).GetMethod("intPtrCast", new Type[] { typeof (object) });
 
         #endregion
 
@@ -379,11 +380,16 @@ namespace clojure.lang.CljCompiler.Ast
                 {
                     m = HostExpr.Method_RT_charCast;
                 }
+                else if(paramType == typeof(IntPtr))
+                {
+                    m = HostExpr.Method_RT_intPtrCast;
+                }
                 else
                 {
+                    var typeCode = Type.GetTypeCode(paramType);
                     if (RT.booleanCast(RT.UncheckedMathVar.deref()))
                     {
-                        switch (Type.GetTypeCode(paramType))
+                        switch (typeCode)
                         {
                             case TypeCode.SByte:
                                 m = HostExpr.Method_RT_uncheckedSbyteCast;
@@ -421,11 +427,13 @@ namespace clojure.lang.CljCompiler.Ast
                             case TypeCode.Decimal:
                                 m = HostExpr.Method_RT_uncheckedDecimalCast;
                                 break;
+                            default:
+                                throw new ArgumentOutOfRangeException("typeCode", typeCode, string.Format("Don't know how to handle typeCode {0}", typeCode));
                         }
                     }
                     else
                     {
-                        switch (Type.GetTypeCode(paramType))
+                        switch (typeCode)
                         {
                             case TypeCode.SByte:
                                 m = HostExpr.Method_RT_sbyteCast;
@@ -463,6 +471,8 @@ namespace clojure.lang.CljCompiler.Ast
                             case TypeCode.Decimal:
                                 m = HostExpr.Method_RT_decimalCast;
                                 break;
+                            default:
+                                throw new ArgumentOutOfRangeException("typeCode", typeCode, string.Format("Don't know how to handle typeCode {0}", typeCode));
                         }
                     }
                 }
