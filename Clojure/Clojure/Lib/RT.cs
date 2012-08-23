@@ -534,19 +534,6 @@ namespace clojure.lang
         {
             AppDomain.CurrentDomain.AssemblyResolve += ResolveAssembly;
 
-            // Eagerly load all referenced assemblies so that they can be used for
-            // resolving clojure namespaces
-            foreach(var asmName in Assembly.GetEntryAssembly().GetReferencedAssemblies())
-            {
-                try
-                {
-                    Assembly.Load(asmName);
-                }
-                catch (Exception)
-                {
-                }
-            }
-
             // TODO: Check for existence of ClojureContext.Default before doing this?
 
             ScriptRuntimeSetup setup = new ScriptRuntimeSetup();
