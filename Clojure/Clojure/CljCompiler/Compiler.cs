@@ -1326,7 +1326,14 @@ namespace clojure.lang
         internal static bool TryLoadInitType(string relativePath)
         {
             var initClassName = InitClassName(relativePath);
-            Type initType = Type.GetType(initClassName);
+            Type initType = null;
+            foreach(var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (asm.IsDynamic) continue;
+                initType = asm.GetType(initClassName);
+                if (initType != null)
+                    break;
+            }
             if (initType == null)
                 return false;
             return InvokeInitType(initType.Assembly, initType);

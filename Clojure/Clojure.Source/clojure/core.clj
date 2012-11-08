@@ -316,8 +316,7 @@
    :static true}
   [^Type c x]   ;;; changed Class to Type
    (if (. c (IsInstanceOfType x)) x
-	(throw  (InvalidCastException.
-	 (str "Unable to cast object of type " (.GetType x) " to type " c)))))  ;;;  original (. c (cast x)))     
+	(throw  (InvalidCastException. (.ToString (.GetType x))))))  ;;;  original (. c (cast x)))     
 
 (defn to-array
   "Returns an array of Objects containing the contents of coll, which
