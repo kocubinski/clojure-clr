@@ -16,11 +16,39 @@
   [ns]
   (.Replace (str ns) \- \_))        ;;; .replace
 
+(defn ^:private throw-on-varargs
+  "Throws an exception if arglist contains a varargs declaration.
+  Protocol/interface method impls defined with deftype, defrecord, and reify
+  don't support varags."
+  [arglist]
+  (when (some #(= '& %) arglist)
+    (throw (ArgumentException.                                                   ;;; IllegalArgumentException.
+            "No varargs support for definterface and defprotocol method sigs;
+ditto for method impls defined with deftype, defrecord, and reify."))))
+
+(defn ^:private throw-on-varargs-or-destr
+  "Throws an exception if arglist contains a varargs declaration or a
+  destructuring form.
+  Protocol/interface method signatures shouldn't use varargs/destructuring."
+  [arglist]
+  (when (some #(or (= '& %) (coll? %)) arglist)
+    (throw (ArgumentException.                                                   ;;; IllegalArgumentException.
+            "No varargs nor destructuring support for definterface and defprotocol method sigs."))))
+
 ;for now, built on gen-interface
-(defmacro definterface 
+(defmacro definterface
+  "Creates a new Java interface with the given name and method sigs.
+  The method return types and parameter types may be specified with type hints,
+  defaulting to Object if omitted.
+
+  (definterface MyInterface
+    (^int method1 [x])
+    (^Bar method2 [^Baz b ^Quux q]))"
+  {:added "1.2"} ;; Present since 1.2, but made public in 1.5.
   [name & sigs]
   (let [tag (fn tag [x] (or (:tag (meta x)) Object))
         psig (fn [[name [& args]]]
+               (throw-on-varargs-or-destr args)
                (vector name (vec (map tag args)) (tag name) (map meta args)))
         cname (with-meta (symbol (str (namespace-munge *ns*) "." name)) (meta name))]
     `(let [] 
@@ -53,6 +81,7 @@
                        (disj 'Object 'java.lang.Object)
                        vec)
         methods (map (fn [[name params & body]]
+                       (throw-on-varargs params)
                        (cons name (maybe-destructured params body)))
                      (apply concat (vals impls)))]
     (when-let [bad-opts (seq (remove #{:no-print} (keys opts)))]
@@ -148,7 +177,8 @@
         hinted-fields fields
         fields (vec (map #(with-meta % nil) fields))
         base-fields fields
-        fields (conj fields '__meta '__extmap)]
+        fields (conj fields '__meta '__extmap)
+		type-hash (hash classname)]
     (when (some #{:volatile-mutable :unsynchronized-mutable} (mapcat (comp keys meta) hinted-fields))
       (throw (ArgumentException. ":volatile-mutable or :unsynchronized-mutable not supported for record fields")))   ;;; IllegalArgumentException
     (let [gs (gensym)]
@@ -157,9 +187,10 @@
         [(conj i 'clojure.lang.IRecord)
          m])
       (eqhash [[i m]] 
-        [i
-         (conj m 
-               `(GetHashCode [this#] (clojure.lang.APersistentMap/mapHash this#))              ;;; hashCode
+        [(conj i 'clojure.lang.IHashEq)
+         (conj m
+               `(hasheq [this#] (bit-xor ~type-hash (.GetHashCode this#)))                      ;;; .hashCode
+               `(GetHashCode [this#] (clojure.lang.APersistentMap/mapHash this#))               ;;; hashCode
                `(Equals [this# ~gs] (clojure.lang.APersistentMap/mapEquals this# ~gs)))])       ;;; equals
       (iobj [[i m]] 
             [(conj i 'clojure.lang.IObj)
@@ -205,6 +236,7 @@
                                               (clojure.lang.MapEntry. k# v#))))
                    `(seq [this#] (seq (concat [~@(map #(list `new `clojure.lang.MapEntry (keyword %) %) base-fields)] 
                                           ~'__extmap)))
+					`(|System.Collections.Generic.IEnumerable`1[clojure.lang.IMapEntry]|.GetEnumerator [this#]  (clojure.lang.Runtime.ImmutableDictionaryEnumerator. this#))
                    `(^ clojure.lang.IPersistentMap assoc [this# k# ~gs]                        ;;; type hint added
                      (condp identical? k#
                        ~@(mapcat (fn [fld]
@@ -272,8 +304,10 @@
         [field-args over] (split-at 20 fields)
         field-count (count fields)
         arg-count (count field-args)
-        over-count (count over)]
+        over-count (count over)
+		docstring (str "Positional factory function for class " classname ".")]
     `(defn ~fn-name
+	   ~docstring
        [~@field-args ~@(if (seq over) '[& overage] [])]
        ~(if (seq over)
           `(if (= (count ~'overage) ~over-count)
@@ -287,6 +321,8 @@
 (defn- validate-fields
   ""
   [fields]
+  (when-not (vector? fields)
+    (throw (Exception. "No fields vector given.")))                                                                             ;;; AssertionError.
   (let [specials #{'__meta '__extmap}]
     (when (some specials fields)
       (throw (Exception. (str "The names in " specials " cannot be used as field names for types or records."))))))             ;;; AssertionError.
@@ -353,10 +389,15 @@
   map (nil for none), and one taking only the fields (using nil for
   meta and extension fields). Note that the field names __meta
   and __extmap are currently reserved and should not be used when
-  defining your own records."
-  {:added "1.2"} 
+  defining your own records.
 
-  [name [& fields] & opts+specs]
+  Given (defrecord TypeName ...), two factory functions will be
+  defined: ->TypeName, taking positional parameters for the fields,
+  and map->TypeName, taking a map of keywords to field values."
+  {:added "1.2"
+   :arglists '([name [& fields] & opts+specs])}
+
+  [name fields & opts+specs]
   (let [gname name
         [interfaces methods opts] (parse-opts+specs opts+specs)
 		ns-part (namespace-munge *ns*)
@@ -370,6 +411,7 @@
        (import ~classname)
        ~(build-positional-factory gname classname fields)
        (defn ~(symbol (str 'map-> gname))
+         ~(str "Factory function for class " classname ", taking a map of keywords to field values.")
          ([m#] (~(symbol (str classname "/create")) m#)))
        ~classname)))
 
@@ -441,10 +483,14 @@
 
   One constructor will be defined, taking the designated fields.  Note
   that the field names __meta and __extmap are currently reserved and
-  should not be used when defining your own types."
-  {:added "1.2"} 
+  should not be used when defining your own types.
 
-  [name [& fields] & opts+specs]
+  Given (deftype TypeName ...), a factory function called ->TypeName
+  will be defined, taking positional parameters for the fields"
+  {:added "1.2"
+   :arglists '([name [& fields] & opts+specs])}
+
+  [name fields & opts+specs]
   (validate-fields fields)
   (let [gname name 
         [interfaces methods opts] (parse-opts+specs opts+specs)
@@ -594,22 +640,25 @@
             string? (recur (assoc opts :doc (first sigs)) (next sigs))
             keyword? (recur (assoc opts (first sigs) (second sigs)) (nnext sigs))
             [opts sigs]))
-        sigs (reduce1 (fn [m s]
-                       (let [name-meta (meta (first s))
-                             mname (with-meta (first s) nil)
-                             [arglists doc]
-                               (loop [as [] rs (rest s)]
-                                 (if (vector? (first rs))
-                                   (recur (conj as (first rs)) (next rs))
-                                   [(seq as) (first rs)]))]
-                         (when (some #{0} (map count arglists))
-                           (throw (ArgumentException. (str "Protocol fn: " mname " must take at least one arg"))))   ;;;IllegalArgumentException
-                         (assoc m (keyword mname)
-                                (merge name-meta
-                                       {:name (vary-meta mname assoc :doc doc :arglists arglists)
-                                        :arglists arglists
-                                        :doc doc}))))
-                     {} sigs)
+        sigs (when sigs
+               (reduce1 (fn [m s]
+                          (let [name-meta (meta (first s))
+                                mname (with-meta (first s) nil)
+                                [arglists doc]
+                                (loop [as [] rs (rest s)]
+                                  (if (vector? (first rs))
+                                    (recur (conj as (first rs)) (next rs))
+                                    [(seq as) (first rs)]))]
+                            (doseq [arglist arglists]
+                              (throw-on-varargs-or-destr arglist))
+                            (when (some #{0} (map count arglists))
+                              (throw (ArgumentException. (str "Protocol fn: " mname " must take at least one arg"))))     ;;; IllegalArgumentException
+                            (assoc m (keyword mname)
+                                   (merge name-meta
+                                          {:name (vary-meta mname assoc :doc doc :arglists arglists)
+                                           :arglists arglists
+                                           :doc doc}))))
+                        {} sigs))
         meths (mapcat (fn [sig]
                         (let [m (munge (:name sig))]
                           (map #(vector m (vec (repeat (dec (count %))'Object)) 'Object) 

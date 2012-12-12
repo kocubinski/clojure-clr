@@ -23,6 +23,7 @@ using clojure.lang.Runtime.Binding;
 using clojure.lang.Runtime;
 using System.Reflection.Emit;
 using System.Reflection;
+using System.Collections.Generic;
 
 namespace clojure.lang.CljCompiler.Ast
 {
@@ -58,8 +59,8 @@ namespace clojure.lang.CljCompiler.Ast
             _targetType = target.HasClrType ? target.ClrType : null;
 
             if ( RT.booleanCast(RT.WarnOnReflectionVar.deref()))
-                RT.errPrintWriter().WriteLine("Reflection warning, {0}:{1} - reference to field/property {2} can't be resolved.",
-                    Compiler.SourcePathVar.deref(), Compiler.GetLineFromSpanMap(_spanMap), memberName); 
+                RT.errPrintWriter().WriteLine("Reflection warning, {0}:{1}:{2} - reference to field/property {3} can't be resolved.",
+                    Compiler.SourcePathVar.deref(), Compiler.GetLineFromSpanMap(_spanMap), Compiler.GetColumnFromSpanMap(_spanMap), memberName); 
         }
 
         #endregion
@@ -107,33 +108,47 @@ namespace clojure.lang.CljCompiler.Ast
 
         public override void EmitUnboxed(RHC rhc, ObjExpr objx, CljILGen ilg)
         {
+            // See MethodExpr.EmitComplexCall to see why this is so complicated
+
+            //  Build the parameter list
+
+            List<ParameterExpression> paramExprs = new List<ParameterExpression>();
+            List<Type> paramTypes = new List<Type>();
+
             Type paramType = _target.HasClrType && _target.ClrType != null && _target.ClrType.IsPrimitive ? _target.ClrType : typeof(object);
-
             ParameterExpression param = Expression.Parameter(paramType);
+            paramExprs.Add(param);
+            paramTypes.Add(paramType);
 
+
+            // Build dynamic call and lambda
             Type returnType = HasClrType ? ClrType : typeof(object);
 
-            // TODO: Get rid of Default
             GetMemberBinder binder = new ClojureGetZeroArityMemberBinder(ClojureContext.Default, _memberName, false);
-            DynamicExpression dyn = Expression.Dynamic(binder, returnType, new Expression[] { param });
+#if CLR2
+            // Not covariant. Sigh.
+            List<Expression> paramsAsExprs = new List<Expression>(paramExprs.Count);
+            paramsAsExprs.AddRange(paramExprs.ToArray());
+            DynamicExpression dyn = Expression.Dynamic(binder, returnType, paramsAsExprs);
+#else
+           DynamicExpression dyn = Expression.Dynamic(binder, returnType, paramExprs);
 
-            Expression call = dyn;
+#endif
 
-            GenContext context = Compiler.CompilerContextVar.deref() as GenContext;
 
-            if (context.DynInitHelper != null)
-                call = context.DynInitHelper.ReduceDyn(dyn);
 
-            call = GenContext.AddDebugInfo(call, _spanMap);
+            LambdaExpression lambda;
+            Type delType;
+            MethodBuilder mbLambda;
 
-            MethodBuilder mbLambda = context.TB.DefineMethod("__interop_" + _memberName + RT.nextID(), MethodAttributes.Static | MethodAttributes.Public, CallingConventions.Standard, returnType, new Type[] {paramType});
-            LambdaExpression lambda = Expression.Lambda(call, new ParameterExpression[] {param});
-            lambda.CompileToMethod(mbLambda);
+            MethodExpr.EmitDynamicCallPreamble(dyn, _spanMap, "__interop_" + _memberName + RT.nextID(), returnType, paramExprs, paramTypes.ToArray(), ilg, out lambda, out delType, out mbLambda);
 
-            GenContext.EmitDebugInfo(ilg, _spanMap);
+            //  Emit target + args (no args, actually)
 
             _target.Emit(RHC.Expression, objx, ilg);
-            ilg.Emit(OpCodes.Call, mbLambda);
+
+            MethodExpr.EmitDynamicCallPostlude(lambda, delType, mbLambda, ilg);
+ 
         }
 
         #endregion

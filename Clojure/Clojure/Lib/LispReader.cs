@@ -201,7 +201,7 @@ namespace clojure.lang
                 if (lntr == null)
                     throw;
 
-                throw new ReaderException(lntr.LineNumber, e);
+                throw new ReaderException(lntr.LineNumber, lntr.ColumnNumber, e);
             }
         }
 
@@ -254,7 +254,7 @@ namespace clojure.lang
             {
                 int d = CharValueInRadix(token[i], radix);
                 if (d == -1)
-                    throw new ArgumentException("Invalid digit: " + (char)d);
+                    throw new ArgumentException("Invalid digit: " + token[i]);
                 uc = uc * radix + d;
             }
             return (char)uc;
@@ -265,7 +265,7 @@ namespace clojure.lang
 
             int uc = CharValueInRadix(initch, radix);
             if (uc == -1)
-                throw new ArgumentException("Invalid digit: " + initch);
+                throw new ArgumentException("Invalid digit: " + (char)initch);
             int i = 1;
             for (; i < length; ++i)
             {
@@ -739,7 +739,7 @@ namespace clojure.lang
                 {
                     char c = (char)readUnicodeChar(token, 1, 4, 16);
                     if (c >= '\uD800' && c <= '\uDFFF') // surrogate code unit?
-                        throw new InvalidOperationException("Invalid character constant: \\u" + ((int)c).ToString("X"));
+                        throw new InvalidOperationException("Invalid character constant: \\u" + ((int)c).ToString("x"));
                     return c;
                 }
                 else if (token.StartsWith("o"))
@@ -804,7 +804,8 @@ namespace clojure.lang
                                 break;
                             default:
                                 {
-                                    if (CharValueInRadix(ch, 8) != -1)
+                                    //if (CharValueInRadix(ch, 8) != -1)  -- this is correct, but we end up with different error message for 8,9 than JVM, so do the following to match:
+                                    if (Char.IsDigit((char)ch))
                                     {
                                         ch = readUnicodeChar((PushbackTextReader)r, ch, 8, 3, false);
                                         if (ch > 255) //octal377
@@ -873,6 +874,7 @@ namespace clojure.lang
                 {
                     return s.withMeta(RT.map(
                         RT.LineKey, startLine, // This is what is supported by the JVM version
+                        RT.ColumnKey, startCol,
                         // We add a :source-span key, value is map with the other values.
                         // A map is used here so that we are print-dup--serializable.
                         RT.SourceSpanKey, RT.map(
@@ -995,7 +997,7 @@ namespace clojure.lang
                     if (formAsIobj != null && formAsIobj.meta() != null)
                     {
                         //filter line numbers & source span info
-                        IPersistentMap newMeta = formAsIobj.meta().without(RT.LineKey).without(RT.SourceSpanKey);
+                        IPersistentMap newMeta = formAsIobj.meta().without(RT.LineKey).without(RT.ColumnKey).without(RT.SourceSpanKey);
                         if (newMeta.count() > 0)
                             return RT.list(WITH_META, ret, syntaxQuote(formAsIobj.meta()));
                     }
@@ -1068,6 +1070,9 @@ namespace clojure.lang
                 
                 if (form is IPersistentCollection)
                 {
+                    if (form is IRecord)
+                        return form;
+
                     if (form is IPersistentMap)
                     {
                         IPersistentVector keyvals = flattenMap(form);
@@ -1244,6 +1249,7 @@ namespace clojure.lang
                 {
                     if (startLine != -1 && o is ISeq)
                         metaAsMap = metaAsMap.assoc(RT.LineKey, startLine)
+                            .assoc(RT.ColumnKey,startCol)
                             .assoc(RT.SourceSpanKey, RT.map(
                                 RT.StartLineKey, startLine,
                                 RT.StartColumnKey, startCol,
@@ -1495,7 +1501,13 @@ namespace clojure.lang
                     dataReaders = (ILookup)RT.DefaultDataReadersVar.deref();
                     dataReader = (IFn)RT.get(dataReaders, tag);
                     if (dataReader == null)
-                        throw new ArgumentException("No reader function for tag " + tag.ToString());
+                    {
+                        IFn default_reader = (IFn)RT.DefaultDataReaderFnVar.deref();
+                        if (default_reader != null)
+                            return default_reader.invoke(tag, o);
+                        else
+                            throw new ArgumentException("No reader function for tag " + tag.ToString());
+                    }
                 }
                 return dataReader.invoke(o);
             }
@@ -1586,33 +1598,45 @@ namespace clojure.lang
                 get { return _line; }
             }
 
-            public ReaderException(int line, Exception e)
+            readonly int _column;
+
+            public int Column
+            {
+                get { return _column; }
+            }
+
+            public ReaderException(int line, int column, Exception e)
                 : base(null, e)
             {
                 _line = line;
+                _column = column;
             }
 
             public ReaderException()
             {
                 _line = -1;
+                _column = -1;
             }
 
             public ReaderException(string msg)
                 : base(msg)
             {
                 _line = -1;
+                _column = -1;
             }
 
             public ReaderException(string msg, Exception innerException)
                 : base(msg, innerException)
             {
                 _line = -1;
+                _column = -1;
             }
 
             private ReaderException(SerializationInfo info, StreamingContext context)
                 : base(info, context)
             {
                 _line = info.GetInt32("Line");
+                _column = info.GetInt32("Column");
             }
 
             [System.Security.SecurityCritical]
@@ -1624,6 +1648,7 @@ namespace clojure.lang
                 }
                 base.GetObjectData(info, context);
                 info.AddValue("Line", this._line, typeof(int));
+                info.AddValue("Column", this._column, typeof(int));
             }
         }
 

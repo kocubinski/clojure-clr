@@ -300,7 +300,8 @@ namespace clojure.lang.CljCompiler.Ast
                             }
                             catch (Exception)
                             {
-                                //aargh
+                                // aargh
+                                // leave t set to null -> return null
                             }
                         }
                     }
@@ -324,8 +325,10 @@ namespace clojure.lang.CljCompiler.Ast
                 {
                     switch (sym.Name)
                     {
-                        case "objects": t = typeof(object[]); break;
-                        case "ints": t = typeof(int[]); break;
+                        case "objects": 
+                            t = typeof(object[]); break;
+                        case "ints": 
+                            t = typeof(int[]); break;
                         case "longs": t = typeof(long[]); break;
                         case "floats": t = typeof(float[]); break;
                         case "doubles": t = typeof(double[]); break;
@@ -338,6 +341,55 @@ namespace clojure.lang.CljCompiler.Ast
                         case "ushorts": t = typeof(ushort[]); break;
                         case "ulongs": t = typeof(ulong[]); break;
                         case "sbytes": t = typeof(sbyte[]); break;
+                        case "int":
+                        case "Int32":
+                        case "System.Int32":
+                            t = typeof(int); break;
+                        case "long":
+                        case "Int64":
+                        case "System.Int64": 
+                            t = typeof(long); break;
+                        case "short":
+                        case "Int16":
+                        case "System.Int16":
+                            t = typeof(short); break;
+                        case "byte":
+                        case "Byte":
+                        case "System.Byte": 
+                            t = typeof(byte); break;
+                        case "float":
+                        case "Single":
+                        case "System.Single": 
+                            t = typeof(float); break;
+                        case "double":
+                        case "Double":
+                        case "System.Double": 
+                            t = typeof(double); break;
+                        case "char":
+                        case "Char":
+                        case "System.Char": 
+                        t = typeof(char); break;
+                        case "bool":
+                        case "boolean":
+                        case "Boolean":
+                        case "System.Boolean": 
+                            t = typeof(bool); break;
+                        case "uint":
+                        case "UInt32":
+                        case "System.UInt32": 
+                            t = typeof(uint); break;
+                        case "ulong":
+                        case "UInt64":
+                        case "System.UInt64": 
+                            t = typeof(ulong); break;
+                        case "ushort":
+                        case "UInt16":
+                        case "System.UInt16": 
+                            t = typeof(ushort); break;
+                        case "sbyte":
+                        case "SByte":
+                        case "System.SByte": 
+                            t = typeof(sbyte); break;
                     }
                 }
             }

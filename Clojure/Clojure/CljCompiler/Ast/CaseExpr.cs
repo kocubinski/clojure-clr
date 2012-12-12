@@ -75,8 +75,8 @@ namespace clojure.lang.CljCompiler.Ast
             _returnType = Compiler.MaybeClrType(returns);
             if (RT.count(skipCheck) > 0 && RT.booleanCast(RT.WarnOnReflectionVar.deref()))
             {
-                RT.errPrintWriter().WriteLine("Performance warning, {0}:{1} - hash collision of some case test constants; if selected, those entries will be tested sequentially.",
-                    Compiler.SourcePathVar.deref(),RT.get(sourceSpan,RT.StartLineKey));
+                RT.errPrintWriter().WriteLine("Performance warning, {0}:{1}:{2} - hash collision of some case test constants; if selected, those entries will be tested sequentially.",
+                    Compiler.SourcePathVar.deref(),Compiler.GetLineFromSpanMap(sourceSpan),Compiler.GetColumnFromSpanMap(sourceSpan));
             }
         
         }
@@ -275,8 +275,8 @@ namespace clojure.lang.CljCompiler.Ast
             {
                 if ( RT.booleanCast(RT.WarnOnReflectionVar.deref()))
                 {
-                    RT.errPrintWriter().WriteLine("Performance warning, {0}:{1} - case has int tests, but tested expression is not primitive.",
-                        Compiler.SourcePathVar.deref(),Compiler.GetLineFromSpanMap(_sourceSpan));
+                    RT.errPrintWriter().WriteLine("Performance warning, {0}:{1}:{2} - case has int tests, but tested expression is not primitive.",
+                        Compiler.SourcePathVar.deref(),Compiler.GetLineFromSpanMap(_sourceSpan),Compiler.GetColumnFromSpanMap(_sourceSpan));
                 }
                 _expr.Emit(RHC.Expression,objx,ilg);
                 ilg.Emit(OpCodes.Call,Compiler.Method_Util_IsNonCharNumeric);
@@ -305,9 +305,10 @@ namespace clojure.lang.CljCompiler.Ast
             }
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1800:DoNotCastUnnecessarily")]
         private void EmitThenForInts(ObjExpr objx, CljILGen ilg, Type exprType, Expr test, Expr then, Label defaultLabel, bool emitUnboxed)
         {
-             if (exprType == null)
+            if (exprType == null)
             {
                 _expr.Emit(RHC.Expression, objx, ilg);
                 test.Emit(RHC.Expression, objx, ilg);
@@ -374,7 +375,7 @@ namespace clojure.lang.CljCompiler.Ast
             EmitExpr(objx, ilg, then, emitUnboxed);  
         }
 
-        private void EmitExpr(ObjExpr objx, CljILGen ilg, Expr expr, bool emitUnboxed)
+        private static void EmitExpr(ObjExpr objx, CljILGen ilg, Expr expr, bool emitUnboxed)
         {
             MaybePrimitiveExpr mbe = expr as MaybePrimitiveExpr;
             if (emitUnboxed && mbe != null)

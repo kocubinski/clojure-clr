@@ -90,15 +90,6 @@
       <HintPath>..\..\lib\DLR\2.0\Microsoft.Scripting.Core.dll</HintPath>
       <Aliases>global,MSC</Aliases>
     </Reference>
-    <Reference Include="nunit.framework">
-      <HintPath>..\packages\NUnit.2.5.10.11092\lib\nunit.framework.dll</HintPath>
-    </Reference>
-    <Reference Include="nunit.mocks">
-      <HintPath>..\packages\NUnit.2.5.10.11092\lib\nunit.mocks.dll</HintPath>
-    </Reference>
-    <Reference Include="pnunit.framework, Version=1.0.4433.35729, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\pNUnit.2.6.0.12054\lib\pnunit.framework.dll</HintPath>
-    </Reference>
     <Reference Include="System" />
     <Reference Include="System.ServiceModel">
       <RequiredTargetFramework>3.0</RequiredTargetFramework>
@@ -115,11 +106,14 @@
   <ItemGroup>
     <Compile Include="CljCompiler\Ast\IlGen.cs" />
     <Compile Include="CljCompiler\Ast\Intrinsics.cs" />
-    <Compile Include="CljCompiler\Ast\IntrinsicsRewriter.cs" />
     <Compile Include="CljCompiler\Ast\CaseExpr.cs" />
     <Compile Include="Lib\ClrTypeSpec.cs" />
     <Compile Include="Lib\ExceptionInfo.cs" />
+    <Compile Include="Lib\IExceptionInfo.cs" />
     <Compile Include="Lib\IFnArity.cs" />
+    <Compile Include="Lib\IFnClosure.cs" />
+    <Compile Include="Lib\Reduced.cs" />
+    <Compile Include="Lib\Task35.cs" />
     <Compile Include="Runtime\Binding\BindingHelpers.cs" />
     <Compile Include="Runtime\Binding\ClojureOverloadResolver.cs" />
     <Compile Include="Runtime\Binding\ClojureCreateInstanceBinder.cs" />

@@ -42,6 +42,16 @@ namespace clojure.lang
                 // TODO: In CLR4, should create a collectible type?
                 context = GenContext.CreateWithExternalAssembly(iName+"_"+RT.nextID(), ".dll", false);
 
+            for (ISeq s = RT.seq(extends); s != null; s = s.next())
+            {
+                object f = s.first();
+                string name = f as String ?? ((Named)f).getName();
+
+                if (name.Contains("-"))
+                    throw new ArgumentException("Interface methods must not contain '-'");
+            }
+
+
             Type[] interfaceTypes = GenClass.CreateTypeArray(extends == null ? null : extends.seq());
 
             TypeBuilder proxyTB = context.ModuleBuilder.DefineType(
@@ -68,8 +78,9 @@ namespace clojure.lang
 
         #region Fun with attributes
 
-        // attributes = ( [ type value]... }
-        // value = { :key value ... }
+        // attributes = ( [ type inits]... }
+        // inits = #{ init1 init2 ... }
+        // init =  { :key value ... }
         // Special key :__args indicates positional arguments
 
         public static readonly Var ExtractAttributesVar = Var.intern(Namespace.findOrCreate(Symbol.intern("clojure.core")),Symbol.intern("extract-attributes"));
@@ -85,36 +96,65 @@ namespace clojure.lang
 
         public static void SetCustomAttributes(TypeBuilder tb, IPersistentMap attributes)
         {
-            for (ISeq s = RT.seq(attributes); s != null; s = s.next())
-                tb.SetCustomAttribute(CreateCustomAttributeBuilder((IMapEntry)(s.first())));
+            foreach ( CustomAttributeBuilder cab in CreateCustomAttributeBuilders(attributes) )
+                tb.SetCustomAttribute(cab);
         }
 
         public static void SetCustomAttributes(FieldBuilder fb, IPersistentMap attributes)
         {
-            for (ISeq s = RT.seq(attributes); s != null; s = s.next())
-                fb.SetCustomAttribute(CreateCustomAttributeBuilder((IMapEntry)(s.first())));
+            foreach (CustomAttributeBuilder cab in CreateCustomAttributeBuilders(attributes))
+                fb.SetCustomAttribute(cab);
         }
 
         public static void SetCustomAttributes(MethodBuilder mb, IPersistentMap attributes)
         {
-            for (ISeq s = RT.seq(attributes); s != null; s = s.next())
-                mb.SetCustomAttribute(CreateCustomAttributeBuilder((IMapEntry)(s.first())));
+            foreach (CustomAttributeBuilder cab in CreateCustomAttributeBuilders(attributes))
+                mb.SetCustomAttribute(cab);
         }
 
         public static void SetCustomAttributes(ParameterBuilder pb, IPersistentMap attributes)
         {
-            for (ISeq s = RT.seq(attributes); s != null; s = s.next())
-                pb.SetCustomAttribute(CreateCustomAttributeBuilder((IMapEntry)(s.first())));
+            foreach (CustomAttributeBuilder cab in CreateCustomAttributeBuilders(attributes))
+                pb.SetCustomAttribute(cab);
+        }
+
+        public static void SetCustomAttributes(ConstructorBuilder cb, IPersistentMap attributes)
+        {
+            foreach (CustomAttributeBuilder cab in CreateCustomAttributeBuilders(attributes))
+                cb.SetCustomAttribute(cab);
         }
 
         static readonly Keyword ARGS_KEY = Keyword.intern(null,"__args");
 
 
-        private static CustomAttributeBuilder CreateCustomAttributeBuilder(IMapEntry me)
+        private static List<CustomAttributeBuilder> CreateCustomAttributeBuilders(IPersistentMap attributes)
         {
-            Type t = (Type) me.key();
-            IPersistentMap args = (IPersistentMap)me.val();
+            List<CustomAttributeBuilder> builders = new List<CustomAttributeBuilder>();
+            for (ISeq s = RT.seq(attributes); s != null; s = s.next())
+                builders.AddRange(CreateCustomAttributeBuilders((IMapEntry)s.first()));
+            return builders;
+        }
 
+
+        private static List<CustomAttributeBuilder> CreateCustomAttributeBuilders(IMapEntry me)
+        {
+ 
+            Type t = (Type)me.key();
+            IPersistentSet inits = (IPersistentSet)me.val();
+
+            List<CustomAttributeBuilder> builders = new List<CustomAttributeBuilder>(inits.count());
+
+            for (ISeq s = RT.seq(inits); s != null; s = s.next())
+            {
+                IPersistentMap init = (IPersistentMap)s.first();
+                builders.Add(CreateCustomAttributeBuilder(t, init));
+            }
+
+            return builders;
+        }
+
+        private static CustomAttributeBuilder CreateCustomAttributeBuilder(Type t, IPersistentMap args)
+        {
             object[] ctorArgs = new object[0];
             Type[] ctorTypes = Type.EmptyTypes;
 

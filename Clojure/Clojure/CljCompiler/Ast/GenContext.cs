@@ -187,7 +187,7 @@ namespace clojure.lang.CljCompiler.Ast
             return expr;
         }
 
-        public static void EmitDebugInfo(CljILGen ilg, IPersistentMap spanMap)
+        public static void EmitDebugInfo(ILGen ilg, IPersistentMap spanMap)
         {
             GenContext context = Compiler.CompilerContextVar.deref() as GenContext;
             if (context == null)
@@ -196,7 +196,7 @@ namespace clojure.lang.CljCompiler.Ast
             context.MaybeEmitDebugInfo(ilg, spanMap);
         }
 
-        public void MaybeEmitDebugInfo(CljILGen ilg, IPersistentMap spanMap)
+        public void MaybeEmitDebugInfo(ILGen ilg, IPersistentMap spanMap)
         {
             if ( _docWriter != null && spanMap != null )
             {
@@ -205,7 +205,16 @@ namespace clojure.lang.CljCompiler.Ast
                 int finishLine;
                 int finishCol;
                 if (Compiler.GetLocations(spanMap, out startLine, out startCol, out finishLine, out finishCol))
-                    ilg.MarkSequencePoint(_docWriter, startLine, startCol, finishLine, finishCol);
+                {
+                    try
+                    {
+                        ilg.MarkSequencePoint(_docWriter, startLine, startCol, finishLine, finishCol);
+                    }
+                    catch (NotSupportedException)
+                    {
+                        // probably a dynamic ilgen
+                    }
+                }
             }
         }
 

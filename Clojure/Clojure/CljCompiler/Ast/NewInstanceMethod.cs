@@ -163,7 +163,7 @@ namespace clojure.lang.CljCompiler.Ast
                 // register as the current method and set up a new env frame
                 // PathNode pnade = new PathNode(PATHTYPE.PATH, (PathNode) CLEAR_PATH.get());
                 Var.pushThreadBindings(
-                    RT.map(
+                    RT.mapUniqueKeys(
                         Compiler.MethodVar, method,
                         Compiler.LocalEnvVar, Compiler.LocalEnvVar.deref(),
                         Compiler.LoopLocalsVar, null,
@@ -174,7 +174,8 @@ namespace clojure.lang.CljCompiler.Ast
                         ));
 
                 // register 'this' as local 0
-                method._thisBinding = Compiler.RegisterLocalThis(((thisName == null) ? dummyThis : thisName), thisTag, null);
+                //method._thisBinding = Compiler.RegisterLocalThis(((thisName == null) ? dummyThis : thisName), thisTag, null);
+                Compiler.RegisterLocalThis(((thisName == null) ? dummyThis : thisName), thisTag, null);
 
                 IPersistentVector argLocals = PersistentVector.EMPTY;
                 method._retType = Compiler.TagType(Compiler.TagOf(name));

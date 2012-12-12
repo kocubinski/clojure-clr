@@ -36,6 +36,9 @@ namespace clojure.lang.CljCompiler.Ast
             get { return _prim; }
         }
 
+        public DynamicMethod DynMethod { get; set; }
+
+
         #endregion
 
         #region C-tors
@@ -151,7 +154,7 @@ namespace clojure.lang.CljCompiler.Ast
                 FnMethod method = new FnMethod(fn, (ObjMethod)Compiler.MethodVar.deref());
                 method.SpanMap = (IPersistentMap)Compiler.SourceSpanVar.deref();
 
-                Var.pushThreadBindings(RT.map(
+                Var.pushThreadBindings(RT.mapUniqueKeys(
                     Compiler.MethodVar, method,
                     Compiler.LocalEnvVar, Compiler.LocalEnvVar.deref(),
                     Compiler.LoopLocalsVar, null,
@@ -167,7 +170,8 @@ namespace clojure.lang.CljCompiler.Ast
 
                 // register 'this' as local 0  
                 if ( !isStatic )
-                    method._thisBinding = Compiler.RegisterLocalThis(Symbol.intern(fn.ThisName ?? "fn__" + RT.nextID()), null, null);
+                    //method._thisBinding = Compiler.RegisterLocalThis(Symbol.intern(fn.ThisName ?? "fn__" + RT.nextID()), null, null);
+                    Compiler.RegisterLocalThis(Symbol.intern(fn.ThisName ?? "fn__" + RT.nextID()), null, null);
 
                 ParamParseState paramState = ParamParseState.Required;
                 IPersistentVector argLocals = PersistentVector.EMPTY;
@@ -243,57 +247,6 @@ namespace clojure.lang.CljCompiler.Ast
                 Var.popThreadBindings();
             }
         }
-
-        #endregion
-
-        #region Immediate mode compilation
-
-        //internal LambdaExpression GenerateImmediateLambda(RHC rhc, ObjExpr objx, GenContext context)
-        //{
-        //    List<ParameterExpression> parmExprs = new List<ParameterExpression>(_argLocals.count());
-
-        //    if (_thisBinding != null )
-        //        _thisBinding.ParamExpression = objx.ThisParam;
-
-        //    try
-        //    {
-
-        //        LabelTarget loopLabel = Expression.Label("top");
-
-        //        Var.pushThreadBindings(RT.map(Compiler.LoopLabelVar, loopLabel, Compiler.MethodVar, this));
-
-        //        for (int i = 0; i < _argLocals.count(); i++)
-        //        {
-        //            LocalBinding b = (LocalBinding)_argLocals.nth(i);
-
-        //            ParameterExpression pexpr = Expression.Parameter(typeof(object), b.Name);
-        //            b.ParamExpression = pexpr;
-        //            parmExprs.Add(pexpr);
-        //        }
-
-        //        List<Expression> bodyExprs = new List<Expression>();
-        //        //bodyExprs.AddRange(typedParmInitExprs);
-        //        bodyExprs.Add(Expression.Label(loopLabel));
-        //        bodyExprs.Add(Compiler.MaybeBox(_body.GenCode(rhc,objx,context)));
-
-
-        //        Expression block;
-        //        //if (typedParmExprs.Count > 0)
-        //        //    block = Expression.Block(typedParmExprs, bodyExprs);
-        //        //else
-        //        block = Expression.Block(bodyExprs);
-
-        //        return Expression.Lambda(
-        //            FuncTypeHelpers.GetFFuncType(parmExprs.Count),
-        //            block,
-        //            Objx.ThisName,
-        //            parmExprs);
-        //    }
-        //    finally
-        //    {
-        //        Var.popThreadBindings();
-        //    }
-        //}
 
         #endregion
 
@@ -402,6 +355,41 @@ namespace clojure.lang.CljCompiler.Ast
                 DoEmitStatic(fn, tb);
             else
                 DoEmit(fn, tb);
+        }
+
+
+        internal void LightEmit(ObjExpr fn, Type fnType)
+        {
+            if (DynMethod != null)
+                return;
+
+            if (Prim != null || fn.IsStatic)
+                throw new InvalidOperationException("No light compile allowed for static methods or methods with primitive interfaces");
+
+            Type[] argTypes = ClrExtensions.ArrayInsert(fnType,GetArgTypes());
+
+            DynamicMethod meth = new DynamicMethod(GetMethodName(), GetReturnType(), argTypes, true);
+      
+            CljILGen baseIlg = new CljILGen(meth.GetILGenerator());
+
+            try
+            {
+                Label loopLabel = baseIlg.DefineLabel();
+                Var.pushThreadBindings(RT.map(Compiler.LoopLabelVar, loopLabel, Compiler.MethodVar, this));
+
+                //GenContext.EmitDebugInfo(baseIlg, SpanMap);
+
+                baseIlg.MarkLabel(loopLabel);
+                _body.Emit(RHC.Return, fn, baseIlg);
+                if (_body.HasNormalExit())
+                    baseIlg.Emit(OpCodes.Ret);
+            }
+            finally
+            {
+                Var.popThreadBindings();
+            }
+
+            DynMethod = meth;
         }
 
         private void DoEmitStatic(ObjExpr fn, TypeBuilder tb)

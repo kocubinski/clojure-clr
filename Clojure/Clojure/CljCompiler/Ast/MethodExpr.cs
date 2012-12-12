@@ -44,8 +44,6 @@ namespace clojure.lang.CljCompiler.Ast
         protected readonly IPersistentMap _spanMap;
         protected readonly Symbol _tag;
 
-        static readonly IntrinsicsRewriter _arithmeticRewriter = new IntrinsicsRewriter();
-
         #endregion
 
         #region C-tors
@@ -112,17 +110,15 @@ namespace clojure.lang.CljCompiler.Ast
 
         private void EmitForMethod(ObjExpr objx, CljILGen ilg)
         {
-            //if (_method.DeclaringType == (Type)Compiler.CompileStubOrigClassVar.deref())
-            //    _method = FindEquivalentMethod(_method, objx.BaseType);
-            if (_args.Exists((x) => x.ParamType == HostArg.ParameterType.ByRef)
-                || Array.Exists(_method.GetParameters(),(x)=> x.ParameterType.IsByRef)
-                || _method.IsGenericMethodDefinition)
+            //if (_args.Exists((x) => x.ParamType == HostArg.ParameterType.ByRef)
+                //|| Array.Exists(_method.GetParameters(),(x)=> x.ParameterType.IsByRef)
+                //|| _method.IsGenericMethodDefinition)
+            if ( _method.IsGenericMethodDefinition )
             {
                 EmitComplexCall(objx, ilg);
                 return;
             }
 
-            // No by-ref args, not a generic method, so we can generate straight arg converts and call
             if (!IsStaticCall)
             {
                 EmitTargetExpression(objx, ilg);
@@ -141,24 +137,61 @@ namespace clojure.lang.CljCompiler.Ast
                 ilg.Emit(OpCodes.Callvirt, _method); 
         }
 
+        public static readonly MethodInfo Method_MethodExpr_GetDelegate = typeof(MethodExpr).GetMethod("GetDelegate");
+ 
+        public static readonly Dictionary<int, Delegate> DelegatesMap = new Dictionary<int, Delegate>();
+
+        public static Delegate GetDelegate(int key)
+        {
+            Delegate d = DelegatesMap[key];
+            return d;
+        }
+
+        public static void CacheDelegate(int key, Delegate d)
+        {
+            DelegatesMap[key] = d;
+        }
 
         protected abstract void EmitTargetExpression(ObjExpr objx, CljILGen ilg);
         protected abstract Type GetTargetType();
 
         private void EmitComplexCall(ObjExpr objx, CljILGen ilg)
         {
+            // This is made more complex than I'd like by light-compiling.
+            // Without light-compile, we could just:
+            //   Emit the target expression
+            //   Emit the arguments (and build up the parameter list for the lambda)
+            //   Create the lambda, compile to a methodbuilder, and call it.
+            // Light-compile forces us to 
+            //     create a lambda at the beginning because we must 
+            //     compile it to a delegate, to get the type
+            //     write code to grab the delegate from a cache
+            //     Then emit the target expression
+            //          emit the arguments (but note we need already to have built the parameter list)
+            //          Call the delegate
+            //  Combined, this becomes
+            //      Build the parameter list
+            //      Build the dynamic call and lambda  (slightly different for light-compile vs full)
+            //      if light-compile
+            //          build the delegate
+            //          cache it
+            //          emit code to retrieve and cast it
+            //       emit the target expression
+            //       emit the args
+            //       emit the call (slightly different for light compile vs full)
+            //
+
+            //  Build the parameter list
+
             List<ParameterExpression> paramExprs = new List<ParameterExpression>(_args.Count + 1);
+            List<Type> paramTypes = new List<Type>(_args.Count + 1);
 
             Type targetType = GetTargetType();
             if (!targetType.IsPrimitive)
                 targetType = typeof(object);
 
-            //if (targetType == (Type)Compiler.CompileStubOrigClassVar.deref())
-            //    targetType = objx.TypeBlder;
-
             paramExprs.Add(Expression.Parameter(targetType));
-            EmitTargetExpression(objx, ilg);
-
+            paramTypes.Add(targetType);
             int i = 0;
             foreach (HostArg ha in _args)
             {
@@ -169,19 +202,83 @@ namespace clojure.lang.CljCompiler.Ast
                 switch (ha.ParamType)
                 {
                     case HostArg.ParameterType.ByRef:
-                        paramExprs.Add(Expression.Parameter(argType.MakeByRefType(), ha.LocalBinding.Name));
-                        ilg.Emit(OpCodes.Ldloca, ha.LocalBinding.LocalVar);
-                        break;
+                        {
+                            Type byRefType = argType.MakeByRefType();
+                            paramExprs.Add(Expression.Parameter(byRefType, ha.LocalBinding.Name));
+                            paramTypes.Add(byRefType);
+                            break;
+                        }
 
                     case HostArg.ParameterType.Standard:
                         if (argType.IsPrimitive && ha.ArgExpr is MaybePrimitiveExpr)
                         {
                             paramExprs.Add(Expression.Parameter(argType, ha.LocalBinding != null ? ha.LocalBinding.Name : "__temp_" + i));
-                            ((MaybePrimitiveExpr)ha.ArgExpr).EmitUnboxed(RHC.Expression, objx, ilg);
+                            paramTypes.Add(argType);
                         }
                         else
                         {
                             paramExprs.Add(Expression.Parameter(typeof(object), ha.LocalBinding != null ? ha.LocalBinding.Name : "__temp_" + i));
+                            paramTypes.Add(typeof(object));
+                        }
+                        break;
+
+                    default:
+                        throw Util.UnreachableCode();
+                }
+            }
+
+            // Build dynamic call and lambda
+            Type returnType = HasClrType ? ClrType : typeof(object);
+            InvokeMemberBinder binder = new ClojureInvokeMemberBinder(ClojureContext.Default, _methodName, paramExprs.Count, IsStaticCall);
+
+            // This is what I want to do.
+            //DynamicExpression dyn = Expression.Dynamic(binder, typeof(object), paramExprs);
+            // Unfortunately, the Expression.Dynamic method does not respect byRef parameters.
+            // The workaround appears to be to roll your delegate type and then use Expression.MakeDynamic, as below.
+
+            List<Type> callsiteParamTypes = new List<Type>(paramTypes.Count + 1);
+            callsiteParamTypes.Add(typeof(System.Runtime.CompilerServices.CallSite));
+            callsiteParamTypes.AddRange(paramTypes);
+            Type dynType = Microsoft.Scripting.Generation.Snippets.Shared.DefineDelegate("__interop__", returnType, callsiteParamTypes.ToArray());
+ 
+#if CLR2
+            // Not covariant. Sigh.
+            List<Expression> paramsAsExprs = new List<Expression>(paramExprs.Count);
+            paramsAsExprs.AddRange(paramExprs.ToArray());
+            DynamicExpression dyn = Expression.MakeDynamic(dynType, binder, paramsAsExprs);
+#else
+            DynamicExpression dyn = Expression.MakeDynamic(dynType, binder, paramExprs);
+#endif
+            LambdaExpression lambda;
+            Type delType;
+            MethodBuilder mbLambda;
+
+            EmitDynamicCallPreamble(dyn, _spanMap, "__interop_" + _methodName + RT.nextID(), returnType, paramExprs, paramTypes.ToArray(), ilg, out lambda, out delType, out mbLambda);
+
+            //  Emit target + args
+            
+            EmitTargetExpression(objx, ilg);
+
+            i = 0;
+            foreach (HostArg ha in _args)
+            {
+                i++;
+                Expr e = ha.ArgExpr;
+                Type argType = e.HasClrType && e.ClrType != null && e.ClrType.IsPrimitive ? e.ClrType : typeof(object);
+
+                switch (ha.ParamType)
+                {
+                    case HostArg.ParameterType.ByRef:
+                        EmitByRefArg(ha,objx,ilg);
+                        break;
+
+                    case HostArg.ParameterType.Standard:
+                        if (argType.IsPrimitive && ha.ArgExpr is MaybePrimitiveExpr)
+                        {
+                            ((MaybePrimitiveExpr)ha.ArgExpr).EmitUnboxed(RHC.Expression, objx, ilg);
+                        }
+                        else
+                        {
                             ha.ArgExpr.Emit(RHC.Expression, objx, ilg);
                         }
                         break;
@@ -191,13 +288,25 @@ namespace clojure.lang.CljCompiler.Ast
                 }
             }
 
-            Type returnType = HasClrType ? ClrType : typeof(object);
-            InvokeMemberBinder binder = new ClojureInvokeMemberBinder(ClojureContext.Default, _methodName, paramExprs.Count, IsStaticCall);
-            DynamicExpression dyn = Expression.Dynamic(binder, typeof(object), paramExprs);
+            EmitDynamicCallPostlude(lambda, delType, mbLambda, ilg);
+        }
+
+        public static void EmitByRefArg(HostArg ha, ObjExpr objx, CljILGen ilg)
+        {
+            if (ha.LocalBinding.IsArg)
+                ilg.Emit(OpCodes.Ldarga, ha.LocalBinding.Index);
+            else if (ha.LocalBinding.IsThis)
+                ilg.Emit(OpCodes.Ldarga, 0);
+            else
+                ilg.Emit(OpCodes.Ldloca, ha.LocalBinding.LocalVar);
+        }
+
+        static public void EmitDynamicCallPreamble(DynamicExpression dyn, IPersistentMap spanMap, string methodName, Type returnType, List<ParameterExpression> paramExprs, Type[] paramTypes, CljILGen ilg, out LambdaExpression lambda, out Type delType, out MethodBuilder mbLambda)
+        {
             Expression call = dyn;
 
             GenContext context = Compiler.CompilerContextVar.deref() as GenContext;
-            if (context.DynInitHelper != null)
+            if (context != null && context.DynInitHelper != null)
                 call = context.DynInitHelper.ReduceDyn(dyn);
 
             if (returnType == typeof(void))
@@ -205,14 +314,53 @@ namespace clojure.lang.CljCompiler.Ast
                 call = Expression.Block(call, Expression.Default(typeof(object)));
                 returnType = typeof(object);
             }
-            call = GenContext.AddDebugInfo(call, _spanMap);
+            else if (returnType != call.Type)
+            {
+                call = Expression.Convert(call, returnType);
+            }
 
-            Type[] paramTypes = paramExprs.Map((x) => x.Type);
-            MethodBuilder mbLambda = context.TB.DefineMethod("__interop_" + _methodName + RT.nextID(), MethodAttributes.Static | MethodAttributes.Public, CallingConventions.Standard, returnType, paramTypes);
-            LambdaExpression lambda = Expression.Lambda(call, paramExprs);
-            lambda.CompileToMethod(mbLambda);
+            call = GenContext.AddDebugInfo(call, spanMap);
 
-            ilg.Emit(OpCodes.Call, mbLambda);
+
+            delType = Microsoft.Scripting.Generation.Snippets.Shared.DefineDelegate("__interop__", returnType, paramTypes);
+            lambda = Expression.Lambda(delType, call, paramExprs);
+            mbLambda = null;
+            
+            if (context == null)
+            {
+                // light compile
+
+                Delegate d = lambda.Compile();
+                int key = RT.nextID();
+                CacheDelegate(key, d);
+ 
+                ilg.EmitInt(key);
+                ilg.Emit(OpCodes.Call, Method_MethodExpr_GetDelegate);
+                ilg.Emit(OpCodes.Castclass, delType);
+            }
+            else
+            {
+                mbLambda = context.TB.DefineMethod(methodName, MethodAttributes.Static | MethodAttributes.Public, CallingConventions.Standard, returnType, paramTypes);
+                lambda.CompileToMethod(mbLambda);
+            }
+        }
+
+
+        static public void EmitDynamicCallPostlude(LambdaExpression lambda, Type delType, MethodBuilder mbLambda, CljILGen ilg)
+        {
+               GenContext context = Compiler.CompilerContextVar.deref() as GenContext;
+ 
+            if ( context == null )
+            {
+                // light compile
+
+                MethodInfo mi = delType.GetMethod("Invoke");
+                ilg.Emit(OpCodes.Callvirt, mi);
+            }
+            else
+            {
+                ilg.Emit(OpCodes.Call, mbLambda);
+            }
         }
 
         internal static void EmitArgsAsArray(IPersistentVector args, ObjExpr objx, CljILGen ilg)
@@ -232,8 +380,30 @@ namespace clojure.lang.CljCompiler.Ast
         public static void EmitTypedArgs(ObjExpr objx, CljILGen ilg, ParameterInfo[] parms, List<HostArg> args)
         {
             for (int i = 0; i < parms.Length; i++)
-                EmitTypedArg(objx, ilg, parms[i].ParameterType, args[i].ArgExpr);
+            {
+                HostArg ha = args[i];
+                ParameterInfo pi = parms[i];
+                bool argIsByRef = ha.ParamType == HostArg.ParameterType.ByRef;
+                bool paramIsByRef = pi.ParameterType.IsByRef;
 
+                if (!paramIsByRef)
+                    EmitTypedArg(objx, ilg, pi.ParameterType, ha.ArgExpr);
+                else // paramIsByRef
+                {
+                    if (argIsByRef)
+                    {
+                        EmitByRefArg(ha, objx, ilg);
+                    }
+                    else
+                    {
+                        EmitTypedArg(objx, ilg, parms[i].ParameterType, args[i].ArgExpr);
+                        LocalBuilder loc = ilg.DeclareLocal(pi.ParameterType);
+                        loc.SetLocalSymInfo("_byRef_temp" + i);
+                        ilg.Emit(OpCodes.Stloc, loc);
+                        ilg.Emit(OpCodes.Ldloca, loc);
+                    }
+                }
+            }
         }
 
         public static void EmitTypedArgs(ObjExpr objx, CljILGen ilg, ParameterInfo[] parms, IPersistentVector args)

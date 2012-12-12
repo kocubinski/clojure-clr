@@ -15,6 +15,7 @@
 using System;
 using System.Collections;
 using System.Threading;
+using System.Collections.Generic;
 
 namespace clojure.lang
 {
@@ -23,7 +24,7 @@ namespace clojure.lang
     /// </summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1708:IdentifiersShouldDifferByMoreThanCase")]
     [Serializable]
-    public class PersistentVector: APersistentVector, IObj, IEditableCollection
+    public class PersistentVector: APersistentVector, IObj, IEditableCollection, IEnumerable
     {
         #region Node class
 
@@ -470,7 +471,7 @@ namespace clojure.lang
         }
 
         [Serializable]
-        sealed public class ChunkedSeq : ASeq, IChunkedSeq
+        sealed public class ChunkedSeq : ASeq, IChunkedSeq, Counted
         {
             #region Data
 
@@ -582,6 +583,15 @@ namespace clojure.lang
 
             #endregion
 
+            #region Counted members
+
+            [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly", MessageId = "count")]
+            public override int count()
+            {
+                return _vec._cnt - (_i + _offset);
+            }
+           
+            #endregion
         }
 
         #endregion
@@ -930,6 +940,77 @@ namespace clojure.lang
             #endregion
         }
  
+        #endregion
+
+        #region kvreduce
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly", MessageId = "kvreduce")]
+        public object kvreduce(IFn f, object init)
+        {
+            int step = 0;
+            for (int i = 0; i < _cnt; i += step)
+            {
+                object[] array = ArrayFor(i);
+                for (int j = 0; i < array.Length; j++)
+                {
+                    init = f.invoke(init, j + i, array[j]);
+                    if (RT.isReduced(init))
+                        return ((IDeref)init).deref();
+                }
+                step = array.Length;
+            }
+            return init;
+        }
+
+        #endregion
+
+        #region Ranged iterator
+
+        public IEnumerator RangedIterator(int start, int end)
+        {
+            int i = start;
+            int b = i - (i%32);
+            object[] arr = (start < count()) ? ArrayFor(i) : null;
+
+            while (i < end)
+            {
+                if (i - b == 32)
+                {
+                    arr = ArrayFor(i);
+                    b += 32;
+                }
+                yield return arr[i++ & 0x01f];
+            }
+        }
+
+        public IEnumerator<object> RangedIteratorT(int start, int end)
+        {
+            int i = start;
+            int b = i - (i % 32);
+            object[] arr = (start < count()) ? ArrayFor(i) : null;
+
+            while (i < end)
+            {
+                if (i - b == 32)
+                {
+                    arr = ArrayFor(i);
+                    b += 32;
+                }
+                yield return arr[i++ & 0x01f];
+            }
+        }
+
+        IEnumerator IEnumerable.GetEnumerator()
+        {
+            return RangedIterator(0, count());
+        }
+        
+        public override IEnumerator<object> GetEnumerator()
+        {
+            return RangedIteratorT(0, count());
+
+        }
+
         #endregion
     }
 }

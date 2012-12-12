@@ -89,6 +89,12 @@ namespace clojure.lang
         internal static readonly Keyword DynamicKeyword = Keyword.intern("dynamic");
 
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
+        internal static readonly Keyword DisableLocalsClearingKeyword = Keyword.intern("disable-locals-clearing");
+
+        internal static readonly Keyword ElideMetaKeyword = Keyword.intern("elide-meta");
+ 
+
         #endregion
 
         #region Vars
@@ -118,8 +124,11 @@ namespace clojure.lang
 
         //Integer
         internal static readonly Var LineVar = Var.create(0).setDynamic();          // From the JVM version
+        internal static readonly Var ColumnVar = Var.create(0).setDynamic();          // From the JVM version
         //internal static readonly Var LINE_BEFORE = Var.create(0).setDynamic();   // From the JVM version
+        //internal static readonly Var COLUMN_BEFORE = Var.create(0).setDynamic();   // From the JVM version
         //internal static readonly Var LINE_AFTER = Var.create(0).setDynamic();    // From the JVM version
+        //internal static readonly Var COLUMN_AFTER = Var.create(0).setDynamic();    // From the JVM version
         internal static readonly Var SourceSpanVar = Var.create(null).setDynamic();    // Mine
 
         internal static readonly Var MethodVar = Var.create(null).setDynamic();
@@ -150,6 +159,25 @@ namespace clojure.lang
 
         internal static readonly Var CompilerContextVar = Var.create(null).setDynamic();
         internal static readonly Var CompilerActiveVar = Var.create(false).setDynamic();
+
+        public static readonly Var CompilerOptionsVar = Var.intern(Namespace.findOrCreate(Symbol.intern("clojure.core")),
+            Symbol.intern("*compiler-options*"), null).setDynamic();
+
+        public static object GetCompilerOption(Keyword k)
+        {
+            return RT.get(CompilerOptionsVar.deref(), k);
+        }
+
+        public static object ElideMeta(object m)
+        {
+            ICollection<Object> elides = (ICollection<Object>)GetCompilerOption(ElideMetaKeyword);
+            if (elides != null)
+            {
+                foreach (object k in elides)
+                    m = RT.dissoc(m, k);
+            }
+            return m;
+        }
 
         #endregion
 
@@ -197,9 +225,17 @@ namespace clojure.lang
 
         #region MethodInfos, etc.
 
+        internal static readonly FieldInfo Field_Closure_Constants = typeof(Closure).GetField("Constants");
+        internal static readonly FieldInfo Field_Closure_Locals = typeof(Closure).GetField("Locals");
+
+        internal static readonly ConstructorInfo Ctor_Closure_2 = typeof(Closure).GetConstructor(new Type[] { typeof(Object[]), typeof(Object[]) });
+
+
         internal static readonly PropertyInfo Method_Compiler_CurrentNamespace = typeof(Compiler).GetProperty("CurrentNamespace");
         internal static readonly MethodInfo Method_Compiler_PushNS = typeof(Compiler).GetMethod("PushNS");
 
+        internal static readonly MethodInfo Method_IFnClosure_GetClosure = typeof(IFnClosure).GetMethod("GetClosure");
+        internal static readonly MethodInfo Method_IFnClosure_SetClosure = typeof(IFnClosure).GetMethod("SetClosure");
         internal static readonly MethodInfo Method_ILookupSite_fault = typeof(ILookupSite).GetMethod("fault");
         internal static readonly MethodInfo Method_ILookupThunk_get = typeof(ILookupThunk).GetMethod("get");
 
@@ -227,6 +263,7 @@ namespace clojure.lang
         internal static readonly MethodInfo Method_RT_uncheckedIntCast_long = typeof(RT).GetMethod("uncheckedIntCast", new Type[] { typeof(long) });
         internal static readonly MethodInfo Method_RT_keyword = typeof(RT).GetMethod("keyword");
         internal static readonly MethodInfo Method_RT_map = typeof(RT).GetMethod("map");
+        internal static readonly MethodInfo Method_RT_mapUniqueKeys = typeof(RT).GetMethod("mapUniqueKeys"); 
         internal static readonly MethodInfo Method_RT_seqOrElse = typeof(RT).GetMethod("seqOrElse");
         internal static readonly MethodInfo Method_RT_set = typeof(RT).GetMethod("set");
         internal static readonly MethodInfo Method_RT_vector = typeof(RT).GetMethod("vector");
@@ -684,20 +721,56 @@ namespace clojure.lang
             Type t = null;
             switch (sym.Name)
             {
-                case "int": t = typeof(int); break;
-                case "long": t = typeof(long); break;
-                case "float": t = typeof(float); break;
-                case "double": t = typeof(double); break;
-                case "char": t = typeof(char); break;
-                case "short": t = typeof(short); break;
-                case "byte": t = typeof(byte); break;
+                case "int":
+                case "Int32":
+                case "System.Int32":
+                    t = typeof(int); break;
+                case "long":
+                case "Int64":
+                case "System.Int64":
+                    t = typeof(long); break;
+                case "float": 
+                case "Single":
+                case "System.Single":
+                    t = typeof(float); break;
+                case "double": 
+                case "Double":
+                case "System.Double":
+                    t = typeof(double); break;
+                case "char": 
+                case "Char":
+                case "System.Char":
+                    t = typeof(char); break;
+                case "short": 
+                case "Int16":
+                case "System.Int16":
+                    t = typeof(short); break;
+                case "byte":
+                case "Byte":
+                case "System.Byte":
+                    t = typeof(byte); break;
                 case "bool":
-                case "boolean": t = typeof(bool); break;
+                case "boolean":
+                case "Boolean":
+                case "System.Boolean":
+                    t = typeof(bool); break;
                 case "void": t = typeof(void); break;
-                case "uint": t = typeof(uint); break;
-                case "ulong": t = typeof(ulong); break;
-                case "ushort": t = typeof(ushort); break;
-                case "sbyte": t = typeof(sbyte); break;
+                case "uint":
+                case "UInt32":
+                case "System.UInt32":
+                    t = typeof(uint); break;
+                case "ulong":
+                case "UInt64":
+                case "System.UInt64":
+                    t = typeof(ulong); break;
+                case "ushort":
+                case "UInt16":
+                case "System.UInt16":
+                    t = typeof(ushort); break;
+                case "sbyte":
+                case "SByte":
+                case "System.SByte":
+                    t = typeof(sbyte); break;
             }
             return t;
         }
@@ -810,6 +883,9 @@ namespace clojure.lang
             int line = (int)LineVar.deref();
             if (RT.meta(form) != null && RT.meta(form).containsKey(RT.LineKey))
                 line = (int)RT.meta(form).valAt(RT.LineKey);
+            int column = (int)ColumnVar.deref();
+            if (RT.meta(form) != null && RT.meta(form).containsKey(RT.ColumnKey))
+                column = (int)RT.meta(form).valAt(RT.ColumnKey);
             IPersistentMap sourceSpan = (IPersistentMap)SourceSpanVar.deref();
             if (RT.meta(form) != null && RT.meta(form).containsKey(RT.SourceSpanKey))
                 sourceSpan = (IPersistentMap)RT.meta(form).valAt(RT.SourceSpanKey);
@@ -817,7 +893,7 @@ namespace clojure.lang
             ParserContext pconExpr = new ParserContext(RHC.Expression);
             ParserContext pconEval = new ParserContext(RHC.Eval);
 
-            Var.pushThreadBindings(RT.map(LineVar, line, SourceSpanVar, sourceSpan, CompilerContextVar, null));
+            Var.pushThreadBindings(RT.map(LineVar, line, ColumnVar, column, SourceSpanVar, sourceSpan, CompilerContextVar, null));
             try
             {
                 form = Macroexpand(form);
@@ -1044,6 +1120,22 @@ namespace clojure.lang
             return ts;
         }
 
+        static Dictionary<Type, Symbol> TypeToTagDict = new Dictionary<Type, Symbol>()
+        {
+            { typeof(bool), Symbol.create(null,"bool") },
+            { typeof(char), Symbol.create(null,"char") },
+            { typeof(byte), Symbol.create(null,"byte") },
+            { typeof(sbyte), Symbol.create(null,"sbyte") },
+            { typeof(short), Symbol.create(null,"short") },
+            { typeof(ushort), Symbol.create(null,"ushort") },
+            { typeof(int), Symbol.create(null,"int") },
+            { typeof(uint), Symbol.create(null,"uint") },
+            { typeof(long), Symbol.create(null,"long") },
+            { typeof(ulong), Symbol.create(null,"ulong") },
+            { typeof(float), Symbol.create(null,"float") },
+            { typeof(double), Symbol.create(null,"double") },
+        };
+
         internal static Symbol TagOf(object o)
         {
             object tag = RT.get(RT.meta(o), RT.TagKey);
@@ -1058,6 +1150,15 @@ namespace clojure.lang
                 string str = tag as String;
                 if (str != null)
                     return Symbol.intern(null, str);
+            }
+
+            {
+                Type t = tag as Type;
+                Symbol sym;
+                if ( t != null && TypeToTagDict.TryGetValue(t, out sym))
+                {
+                    return sym;
+                }
             }
 
             return null;
@@ -1079,6 +1180,19 @@ namespace clojure.lang
 
             int line;
             if (GetLocation(spanMap,RT.StartLineKey,out line) )
+                return line;
+
+            return 0;
+        }
+
+
+        public static int GetColumnFromSpanMap(IPersistentMap spanMap)
+        {
+            if (spanMap == null)
+                return 0;
+
+            int line;
+            if (GetLocation(spanMap, RT.StartColumnKey, out line))
                 return line;
 
             return 0;
@@ -1109,14 +1223,23 @@ namespace clojure.lang
                 && GetLocation(spanMap, RT.EndColumnKey, out finishCol);
         }
 
-        static GenContext _evalContext = GenContext.CreateWithInternalAssembly("eval", false);
+
+        static GenContext CreateEvalContext(string name, bool createDynInitHelper)
+        {
+            GenContext c = GenContext.CreateWithInternalAssembly("eval", createDynInitHelper);
+            //TypeBuilder tb = c.AssemblyGen.DefinePublicType("__Scratch__", typeof(object), false);
+            //return c.WithTypeBuilder(tb);
+            return c;
+        }
+
+        static GenContext _evalContext = CreateEvalContext("eval", false);
         static public GenContext EvalContext { get { return _evalContext; } }
 
         static int _saveId = 0;
         public static void SaveEvalContext()
         {
             _evalContext.SaveAssembly();
-            _evalContext = GenContext.CreateWithInternalAssembly("eval" + (_saveId++).ToString(), false);
+            _evalContext = CreateEvalContext("eval" + (_saveId++).ToString(), false);
         }
 
         public static bool IsCompiling
@@ -1177,7 +1300,7 @@ namespace clojure.lang
 
             LineNumberingTextReader lntr = rdr as LineNumberingTextReader ?? new LineNumberingTextReader(rdr);
 
-            Var.pushThreadBindings(RT.map(
+            Var.pushThreadBindings(RT.mapUniqueKeys(
                 SourcePathVar, sourcePath,
                 SourceVar, sourceName,
                 MethodVar, null,
@@ -1213,7 +1336,7 @@ namespace clojure.lang
                 ConstructorBuilder cb = initTB.DefineConstructor(MethodAttributes.Static, CallingConventions.Standard, Type.EmptyTypes);
                 ILGenerator cbGen = cb.GetILGenerator();
 
-                Label exBlock = cbGen.BeginExceptionBlock();
+                cbGen.BeginExceptionBlock();
 
                 cbGen.Emit(OpCodes.Call,Method_Compiler_PushNS);
                 cbGen.Emit(OpCodes.Call, constInitsMB);
@@ -1228,7 +1351,7 @@ namespace clojure.lang
             }
             catch (LispReader.ReaderException e)
             {
-                throw new CompilerException(sourcePath, e.Line, e.InnerException);
+                throw new CompilerException(sourcePath, e.Line,  e.Column, e.InnerException);
             }
             finally
             {
@@ -1243,13 +1366,16 @@ namespace clojure.lang
             int line = (int)LineVar.deref();
             if (RT.meta(form) != null && RT.meta(form).containsKey(RT.LineKey))
                 line = (int)RT.meta(form).valAt(RT.LineKey);
+            int column = (int)ColumnVar.deref();
+            if (RT.meta(form) != null && RT.meta(form).containsKey(RT.ColumnKey))
+                column = (int)RT.meta(form).valAt(RT.ColumnKey);
             IPersistentMap sourceSpan = (IPersistentMap)SourceSpanVar.deref();
             if (RT.meta(form) != null && RT.meta(form).containsKey(RT.SourceSpanKey))
                 sourceSpan = (IPersistentMap)RT.meta(form).valAt(RT.SourceSpanKey);
 
             ParserContext evPC = new ParserContext(RHC.Eval);
  
-            Var.pushThreadBindings(RT.map(LineVar, line, SourceSpanVar, sourceSpan));
+            Var.pushThreadBindings(RT.map(LineVar, line, ColumnVar, column, SourceSpanVar, sourceSpan));
 
             try
             {
@@ -1369,7 +1495,7 @@ namespace clojure.lang
 
             LineNumberingTextReader lntr = rdr as LineNumberingTextReader ?? new LineNumberingTextReader(rdr);
  
-            Var.pushThreadBindings(RT.map(
+            Var.pushThreadBindings(RT.mapUniqueKeys(
                 //LOADER, RT.makeClassLoader(),
                 SourcePathVar, sourcePath,
                 SourceVar, sourceName,
@@ -1380,7 +1506,9 @@ namespace clojure.lang
                 RT.DataReadersVar, RT.DataReadersVar.deref(),
                 CompilerContextVar, EvalContext
                 //LINE_BEFORE, lntr.LineNumber,
-                //LINE_AFTER, lntr.LineNumber
+                //LINE_AFTER, lntr.LineNumber,
+                //COLUMN_BEFORE, lntr.ColumnNumber,
+                //COLUMN_AFTER, lntr.ColumnNumber
                 ));
 
             try
@@ -1388,15 +1516,17 @@ namespace clojure.lang
                 while ((form = LispReader.read(lntr, false, eofVal, false)) != eofVal)
                 {
                     //LINE_AFTER.set(lntr.LineNumber);
+                    //COLUMN_AFTER.set(lntr.ColumnNumber);
                     //Expression<ReplDelegate> ast = Compiler.GenerateLambda(form, false);
                     //ret = ast.Compile().Invoke();
                     ret = eval(form);
                     //LINE_BEFORE.set(lntr.LineNumber);
+                    //COLUMN_BEFORE.set(lntr.ColumnNumber);
                 }
             }
             catch (LispReader.ReaderException e)
             {
-                throw new CompilerException(sourcePath, e.Line, e.InnerException);
+                throw new CompilerException(sourcePath, e.Line, e.Column, e.InnerException);
             }
             finally
             {
@@ -1468,7 +1598,7 @@ namespace clojure.lang
             }
             catch (Exception e)
             {
-                throw new CompilerException((String)SourcePathVar.deref(), (int)LineVar.deref(), e);
+                throw new CompilerException((String)SourcePathVar.deref(), (int)LineVar.deref(), (int)ColumnVar.deref(), e);
             }
         }
 
@@ -1537,13 +1667,16 @@ namespace clojure.lang
         private static Expr AnalyzeSeq(ParserContext pcon, ISeq form, string name )
         {
             int line = (int)LineVar.deref();
+            int column = (int)ColumnVar.deref();
+            IPersistentMap sourceSpan = (IPersistentMap)SourceSpanVar.deref();
             if (RT.meta(form) != null && RT.meta(form).containsKey(RT.LineKey))
                 line = (int)RT.meta(form).valAt(RT.LineKey);
-            IPersistentMap sourceSpan = (IPersistentMap)SourceSpanVar.deref();
+            if (RT.meta(form) != null && RT.meta(form).containsKey(RT.ColumnKey))
+                column = (int)RT.meta(form).valAt(RT.ColumnKey);
             if (RT.meta(form) != null && RT.meta(form).containsKey(RT.SourceSpanKey))
                 sourceSpan = (IPersistentMap)RT.meta(form).valAt(RT.SourceSpanKey);
 
-            Var.pushThreadBindings(RT.map(LineVar, line, SourceSpanVar, sourceSpan));
+            Var.pushThreadBindings(RT.map(LineVar, line, ColumnVar, column, SourceSpanVar, sourceSpan));
 
             try
             {
@@ -1575,7 +1708,7 @@ namespace clojure.lang
             }
             catch (Exception e)
             {
-                throw new CompilerException((String)SourcePathVar.deref(), (int)LineVar.deref(), e);
+                throw new CompilerException((String)SourcePathVar.deref(), (int)LineVar.deref(), (int)ColumnVar.deref(), e);
             }
             finally
             {
@@ -1591,31 +1724,46 @@ namespace clojure.lang
         [Serializable]
         public sealed class CompilerException : Exception
         {
+            #region Data
+            
+            string FileSource { get; set; }
+            int Line { get; set; }
+            
+            #endregion
+
             #region C-tors
 
             public CompilerException()
             {
+                FileSource = "<unknown>";
             }
 
             public CompilerException(string message)
                 : base(message)
             {
+                FileSource = "<unknown>";
             }
 
             public CompilerException(string message, Exception innerException)
                 :base(message,innerException)
             {
+                FileSource = "<unknown>";
             }
 
-            public CompilerException(string source, int line, Exception cause)
-                : base(ErrorMsg(source, line, cause.ToString()), cause)
+            public CompilerException(string source, int line, int column, Exception cause)
+                : base(ErrorMsg(source, line, column, cause.ToString()), cause)
             {
-                Source = source;
+                FileSource = source;
+                Line = line;
             }
 
             private CompilerException(SerializationInfo info, StreamingContext context)
                 : base(info, context)
             {
+                if (info == null)
+                    throw new ArgumentNullException("info");
+
+                FileSource = info.GetString("FileSource");
             }
 
             #endregion
@@ -1627,9 +1775,17 @@ namespace clojure.lang
                 return Message;
             }
 
-            static string ErrorMsg(string source, int line, string s)
+            static string ErrorMsg(string source, int line, int column, string s)
             {
-                return string.Format("{0}, compiling: ({1}:{2})", s, source, line);
+                return string.Format("{0}, compiling: ({1}:{2}:{3})", s, source, line,column);
+            }
+
+            public override void GetObjectData(SerializationInfo info, StreamingContext context)
+            {
+                if (info == null)
+                    throw new System.ArgumentNullException("info");
+                base.GetObjectData(info, context);
+                info.AddValue("FileSource", FileSource);
             }
 
             #endregion

@@ -16,6 +16,7 @@ using System;
 
 using System.Collections;
 using System.Threading;
+using System.Collections.Generic;
 
 namespace clojure.lang
 {
@@ -546,6 +547,38 @@ namespace clojure.lang
          }
 
         #endregion
+
+        #region kvreduce & fold
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly", MessageId = "kvreduce")]
+        public object kvreduce(IFn f, object init)
+        {
+            init = _hasNull ? f.invoke(init,null,_nullValue) : init;
+            if (RT.isReduced(init))
+                return ((IDeref)init).deref();
+            if (_root != null)
+                return _root.KVReduce(f, init);
+            return init;
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly", MessageId = "fold")]
+        public object fold(long n, IFn combinef, IFn reducef, IFn fjinvoke, IFn fjtask, IFn fjfork, IFn fjjoin)
+        {
+            // JVM: we are ignoring n for now
+            Func<object> top = new Func<object>(() =>
+            {
+                object ret = combinef.invoke();
+                if (_root != null)
+                    ret = combinef.invoke(ret, _root.Fold(combinef, reducef, fjtask, fjfork, fjjoin));
+                return _hasNull
+                    ? combinef.invoke(ret, reducef.invoke(combinef.invoke(), null, _nullValue))
+                    : ret;
+            });
+
+            return fjinvoke.invoke(top);
+        }
+
+        #endregion
         
         #region INode
 
@@ -627,6 +660,25 @@ namespace clojure.lang
             /// <param name="removedLeaf"></param>
             /// <returns></returns>
             INode Without(AtomicReference<Thread> edit, int shift, int hash, object key, Box removedLeaf);
+
+            /// <summary>
+            /// Perform key-value reduce.
+            /// </summary>
+            /// <param name="f"></param>
+            /// <param name="init"></param>
+            /// <returns></returns>
+            object KVReduce(IFn f, Object init);
+
+            /// <summary>
+            /// Fold
+            /// </summary>
+            /// <param name="combinef"></param>
+            /// <param name="reducef"></param>
+            /// <param name="fjtask"></param>
+            /// <param name="fjfork"></param>
+            /// <param name="fjjoin"></param>
+            /// <returns></returns>
+            object Fold(IFn combinef, IFn reducef, IFn fjtask, IFn fjfork, IFn fjjoin);
         }
 
         #endregion
@@ -815,6 +867,52 @@ namespace clojure.lang
                     return editable;
                 }
                 return EditAndSet(edit, idx, n);
+            }
+
+            public object KVReduce(IFn f, object init)
+            {
+                foreach (INode node in _array)
+                {
+                    if (node != null)
+                    {
+                        init = node.KVReduce(f, init);
+                        if (RT.isReduced(init))
+                            return ((IDeref)init).deref();
+                    }
+                }
+                return init;
+            }
+
+            public object Fold(IFn combinef, IFn reducef, IFn fjtask, IFn fjfork, IFn fjjoin)
+            {
+                List<Func<object>> tasks = new List<Func<object>>();
+                foreach (INode node in _array) 
+                {
+                    tasks.Add(() =>
+                        {
+                            return node.Fold(combinef, reducef, fjtask, fjfork, fjjoin);
+                        }
+                    );
+                }
+
+                return FoldTasks(tasks, combinef, fjtask, fjfork, fjjoin);
+            }
+
+            static object FoldTasks(List<Func<object>> tasks, IFn combinef, IFn fjtask, IFn fjfork, IFn fjjoin)
+            {
+
+                if (tasks.Count == 0)
+                    return combinef.invoke();
+
+                if (tasks.Count == 1 )
+                    return tasks[0].Invoke();
+                
+                int half = tasks.Count / 2;
+                List<Func<object>> t1 = tasks.GetRange(0, half);
+                List<Func<object>> t2 = tasks.GetRange(half, tasks.Count - half);
+                object forked = fjfork.invoke(fjtask.invoke(new Func<object>(() => { return FoldTasks(t2, combinef, fjtask, fjfork, fjjoin); })));
+
+                return combinef.invoke(FoldTasks(t1, combinef, fjtask, fjfork, fjjoin), fjjoin.invoke(forked));
             }
 
             #endregion
@@ -1192,8 +1290,18 @@ namespace clojure.lang
                     return EditAndRemovePair(edit, bit, idx);
                 }
                 return this;
-            }            
-        
+            }
+
+            public object KVReduce(IFn f, object init)
+            {
+                return NodeSeq.KvReduce(_array, f, init);
+            }
+
+            public object Fold(IFn combinef, IFn reducef, IFn fjtask, IFn fjfork, IFn fjjoin)
+            {
+                return NodeSeq.KvReduce(_array, reducef, combinef.invoke());
+            }
+
 
             #endregion
 
@@ -1386,6 +1494,16 @@ namespace clojure.lang
                 return editable;
             }
 
+            public object KVReduce(IFn f, object init)
+            {
+                return NodeSeq.KvReduce(_array, f, init);
+            }
+
+            public object Fold(IFn combinef, IFn reducef, IFn fjtask, IFn fjfork, IFn fjjoin)
+            {
+                return NodeSeq.KvReduce(_array, reducef, combinef.invoke());
+            }
+
             #endregion
 
             #region Implementation
@@ -1507,6 +1625,28 @@ namespace clojure.lang
                     return Create(_array, _i, _s.next());
                 return Create(_array, _i + 2, null);
             }
+            #endregion
+
+            #region KvReduce
+
+            static public object KvReduce(object[] array, IFn f, object init)
+            {
+                for (int i = 0; i < array.Length; i += 2)
+                {
+                    if (array[i] != null)
+                        init = f.invoke(init, array[i], array[i + 1]);
+                    else
+                    {
+                        INode node = (INode)array[i + 1];
+                        if (node != null)
+                            init = node.KVReduce(f, init);
+                    }
+                    if (RT.isReduced(init))
+                        return ((IDeref)init).deref();
+                }
+                return init;
+            }
+
             #endregion
         }
     }

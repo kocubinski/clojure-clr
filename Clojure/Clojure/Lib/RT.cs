@@ -324,6 +324,9 @@ namespace clojure.lang
         public static readonly Keyword LineKey 
             = Keyword.intern(null, "line");
 
+        public static readonly Keyword ColumnKey
+            = Keyword.intern(null, "column");
+
         public static readonly Keyword FileKey
             = Keyword.intern(null, "file");
 
@@ -434,6 +437,9 @@ namespace clojure.lang
 
         public static readonly Var DataReadersVar
             = Var.intern(ClojureNamespace, Symbol.intern("*data-readers*"), RT.map()).setDynamic();
+
+        public static readonly Var DefaultDataReaderFnVar
+            = Var.intern(ClojureNamespace, Symbol.intern("*default-data-reader-fn*"), RT.map());
 
         public static readonly Var DefaultDataReadersVar
            = Var.intern(ClojureNamespace, Symbol.intern("default-data-readers"), RT.map());
@@ -588,10 +594,11 @@ namespace clojure.lang
 
         static void DoInit()
         {
+            //Stopwatch sw = new Stopwatch();
+            //sw.Start();
             load("clojure/core");
-            //load("clojure/zip", false);
-            ////load("clojure/xml", false);
-            //load("clojure/set", false);
+            //sw.Stop();
+            //Console.WriteLine("Initial clojure/core load: {0} milliseconds.", sw.ElapsedMilliseconds);
 
             PostBootstrapInit();
         }
@@ -599,7 +606,7 @@ namespace clojure.lang
         public static void PostBootstrapInit()
         {
             Var.pushThreadBindings(
-                RT.map(CurrentNSVar, CurrentNSVar.deref(),
+                RT.mapUniqueKeys(CurrentNSVar, CurrentNSVar.deref(),
                 WarnOnReflectionVar, WarnOnReflectionVar.deref(),
                 RT.UncheckedMathVar, RT.UncheckedMathVar.deref()));
             try
@@ -974,12 +981,22 @@ namespace clojure.lang
 
 
             IDictionary m = coll as IDictionary;
-            if (m != null && key != null)
+            if (m != null)
             {
                 //return m.Contains(key) ? RT.T : RT.F;
-                return m.Contains(key);
+                return key != null && m.Contains(key);
             }
             
+#if CLR2
+            // ISet<T> does not exist for CLR2
+            // TODO: Make this work for HashSet<T> no matter the T
+            HashSet<Object> hs = coll as HashSet<Object>;
+            if ( hs != null) 
+            {
+                // return  hs.Contains(key) ? RT.T : RT.F;
+                return hs.Contains(key);
+            }
+#else
             // TODO: Make this work for ISet<T> no matter the T
             ISet<Object> iso = coll as ISet<Object>;
             if (iso != null )
@@ -987,15 +1004,15 @@ namespace clojure.lang
                 // return  iso.Contains(key) ? RT.T : RT.F;
                 return iso.Contains(key);
             }
+#endif
 
             if (Util.IsNumeric(key) && (coll is String || coll.GetType().IsArray))
             {
                 int n = Util.ConvertToInt(key);
                 return n >= 0 && n < count(coll);
             }
-            
-            //return RT.F;
-            return false;
+
+            throw new ArgumentException("contains? not supported on type: " + coll.GetType().Name);
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly")]
@@ -1153,13 +1170,17 @@ namespace clojure.lang
                 return notFound;
             }
 
-            IList list = coll as IList;
-            if (list != null)   // Changed to RandomAccess in Java Rev 1218.  
-            {
-                if (n < list.Count)
-                    return list[n];
-                return notFound;
-            }
+            // Causes a problem with infinite LazySequences
+            // Four years after the fact, I now know why the change was made in Java Rev 1218.
+            // There is no RandomAccess equivalent in CLR.
+            // So we don't blow off IList's completely, I put this after the code that catches LazySeqs.
+            //IList list = coll as IList;
+            //if (list != null)   // Changed to RandomAccess in Java Rev 1218.  
+            //{
+            //    if (n < list.Count)
+            //        return list[n];
+            //    return notFound;
+            //}
 
             JReMatcher jrem = coll as JReMatcher;
             if (jrem != null)
@@ -1218,6 +1239,14 @@ namespace clojure.lang
                     if (i == n)
                         return seq.first();
                 }
+                return notFound;
+            }
+
+            IList list = coll as IList;
+            if (list != null)  
+            {
+                if (n < list.Count)
+                    return list[n];
                 return notFound;
             }
 
@@ -1560,9 +1589,13 @@ namespace clojure.lang
             if (x is byte || x is short || x is uint || x is sbyte || x is ushort)
                 return Util.ConvertToLong(x);
 
+
             Ratio r = x as Ratio;
             if (r != null)
                 return longCast(r.BigIntegerValue());
+
+            if (x is Char)
+                return longCast((char)x);
 
             return longCast(Util.ConvertToDouble(x));
         }
@@ -2157,6 +2190,16 @@ namespace clojure.lang
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly")]
+        public static IPersistentMap mapUniqueKeys(params object[] init)
+        {
+            if (init == null)
+                return PersistentArrayMap.EMPTY;
+            else if (init.Length <= PersistentArrayMap.HashtableThreshold)
+                return new PersistentArrayMap(init);
+            return PersistentHashMap.create(init);
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly")]
         public static IPersistentSet set(params object[] init)
         {
             return PersistentHashSet.createWithCheck(init);
@@ -2434,6 +2477,12 @@ namespace clojure.lang
 
         #region Reader support
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly")]
+        public static bool isReduced(Object r)
+        {
+            return r is Reduced;
+        }
+        
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly")]
         public static bool suppressRead()
         {
@@ -3103,7 +3152,7 @@ namespace clojure.lang
                 {
                     try
                     {
-                        Var.pushThreadBindings(RT.map(CurrentNSVar, CurrentNSVar.deref(),
+                    Var.pushThreadBindings(RT.mapUniqueKeys(CurrentNSVar, CurrentNSVar.deref(),
                                                       WarnOnReflectionVar, WarnOnReflectionVar.deref(),
                                                       RT.UncheckedMathVar, RT.UncheckedMathVar.deref()));
                         loaded = Compiler.LoadAssembly(assyInfo, relativePath);

@@ -677,6 +677,21 @@ namespace clojure.lang
 
         #endregion
 
+        #region kvreduce
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly", MessageId = "kvreduce")]
+        public object kvreduce(IFn f, object init)
+        {
+            if (_tree != null)
+                init = _tree.KvReduce(f, init);
+            if (RT.isReduced(init))
+                init = ((IDeref)init).deref();
+            return init;
+        }
+
+
+        #endregion
+
         [Serializable]
         abstract internal class Node : AMapEntry
         {
@@ -736,6 +751,23 @@ namespace clojure.lang
 
             abstract protected internal Node Replace(object key, object val, Node left, Node right);
 
+            public object KvReduce(IFn f, object init)
+            {
+                if (Left != null)
+                {
+                    init = Left.KvReduce(f, init);
+                    if (RT.isReduced(init))
+                        return init;
+                }
+                init = f.invoke(init, key(), val());
+                if (RT.isReduced(init))
+                    return init; 
+                if (Right != null)
+                {
+                    init = Right.KvReduce(f, init);
+                }
+                return init;
+            }
 
         }  // end class Node
 

@@ -54,12 +54,26 @@ namespace BootstrapCompile
             string mathVal = Environment.GetEnvironmentVariable(UNCHECKED_MATH_PROP);
             bool uncheckedMath = mathVal == null ? false : mathVal.Equals("true");
 
+            object compilerOptions = null;
+            foreach (DictionaryEntry kv in Environment.GetEnvironmentVariables())
+            {
+                String name = (String)kv.Key;
+                String v = (String)kv.Value;
+                if ( name.StartsWith("CLOJURE_COMPILER_") )
+                {
+                    compilerOptions = RT.assoc(compilerOptions
+                        ,RT.keyword(null,name.Substring(1+name.LastIndexOf('_')))
+                        ,RT.readString(v));
+                }
+            }
+
             try
             {
                 Var.pushThreadBindings(RT.map(
                     Compiler.CompilePathVar, path,
                     RT.WarnOnReflectionVar, warnOnReflection,
-                    RT.UncheckedMathVar, uncheckedMath
+                    RT.UncheckedMathVar, uncheckedMath,
+                    Compiler.CompilerOptionsVar, compilerOptions
                     ));
 
                 Stopwatch sw = new Stopwatch();

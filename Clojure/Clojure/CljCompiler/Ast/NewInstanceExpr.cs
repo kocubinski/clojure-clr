@@ -175,7 +175,7 @@ namespace clojure.lang.CljCompiler.Ast
             try
             {
                 Var.pushThreadBindings(
-                    RT.map(
+                    RT.mapUniqueKeys(
                         Compiler.ConstantsVar, PersistentVector.EMPTY,
                         Compiler.ConstantIdsVar, new IdentityHashMap(),
                         Compiler.KeywordsVar, PersistentHashMap.EMPTY,
@@ -190,7 +190,7 @@ namespace clojure.lang.CljCompiler.Ast
                 if (ret.IsDefType)
                 {
                     Var.pushThreadBindings(
-                        RT.map(
+                        RT.mapUniqueKeys(
                             Compiler.MethodVar, null,
                             Compiler.LocalEnvVar, ret.Fields,
                             Compiler.CompileStubSymVar, Symbol.intern(null, tagName),
@@ -493,7 +493,7 @@ namespace clojure.lang.CljCompiler.Ast
             return !implemented.Contains(mi) && mi.DeclaringType.IsInterface && !(!IsDefType && mi.DeclaringType == typeof(IObj) || mi.DeclaringType == typeof(IMeta));
         }
 
-        private void EmitDummyMethod(TypeBuilder tb, MethodInfo mi)
+        private static void EmitDummyMethod(TypeBuilder tb, MethodInfo mi)
         {
             MethodBuilder mb = tb.DefineMethod(ExplicitMethodName(mi), MethodAttributes.ReuseSlot | MethodAttributes.Public | MethodAttributes.Virtual, mi.ReturnType, Compiler.GetTypes(mi.GetParameters()));
             CljILGen gen = new CljILGen(mb.GetILGenerator());
